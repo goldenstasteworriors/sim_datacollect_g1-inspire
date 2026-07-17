@@ -1,0 +1,8 @@
+artifacts/
+outputs/
+checkpoints/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.env
+.cache/

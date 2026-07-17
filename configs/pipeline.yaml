@@ -1,0 +1,40 @@
+robot:
+  embodiment: unitree_g1_29dof_inspire
+  controlled_side: right
+  arm_joint_names:
+    - right_shoulder_pitch_joint
+    - right_shoulder_roll_joint
+    - right_shoulder_yaw_joint
+    - right_elbow_joint
+    - right_wrist_roll_joint
+    - right_wrist_pitch_joint
+    - right_wrist_yaw_joint
+  hand_motor_names: [pinky, ring, middle, index, thumb_bend, thumb_rotation]
+  hand_command_min: [0, 0, 0, 0, 0, 0]
+  hand_command_max: [1, 1, 1, 1, 1, 1]
+
+task:
+  instruction: "用右手抓起烧杯并抬升"
+  asset_path: assets/labutopia/Beaker_01.usd
+  object_prim_path: /World/envs/env_.*/Object
+  object_position: [-0.35, 0.40, 0.82]
+  episode_seconds: 4.0
+  fps: 30
+  phases:
+    approach: 0.35
+    close: 0.25
+    lift: 0.40
+
+hug:
+  repo: kevinywu/hug
+  checkpoint: checkpoints/hug/hug_full.safetensors
+  mano_dir: /home/ykj/commonly_used/mano_v1_2/models
+  sample_dir: third_party/hug/data/custom
+
+dataset:
+  root: outputs/lab_beaker_g1_inspire
+  robot_type: unitree_g1_right_inspire_rh56dftp
+  camera_names: [front, right_wrist]
+  image_size: [256, 256]
+  store_depth: true
+

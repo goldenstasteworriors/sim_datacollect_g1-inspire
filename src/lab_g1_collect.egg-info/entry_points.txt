@@ -1,0 +1,2 @@
+[console_scripts]
+lab-g1 = lab_g1_collect.cli:main

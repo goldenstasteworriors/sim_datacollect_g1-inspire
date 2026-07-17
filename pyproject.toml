@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lab-g1-collect"
+version = "0.1.0"
+description = "G1 right arm + Inspire RH56DFTP laboratory grasp data pipeline"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.24", "Pillow>=10", "PyYAML>=6"]
+
+[project.scripts]
+lab-g1 = "lab_g1_collect.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+

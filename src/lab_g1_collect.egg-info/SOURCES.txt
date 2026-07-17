@@ -1,0 +1,13 @@
+pyproject.toml
+src/lab_g1_collect/__init__.py
+src/lab_g1_collect/cli.py
+src/lab_g1_collect/config.py
+src/lab_g1_collect/dataset.py
+src/lab_g1_collect/retarget.py
+src/lab_g1_collect/trajectory.py
+src/lab_g1_collect.egg-info/PKG-INFO
+src/lab_g1_collect.egg-info/SOURCES.txt
+src/lab_g1_collect.egg-info/dependency_links.txt
+src/lab_g1_collect.egg-info/entry_points.txt
+src/lab_g1_collect.egg-info/requires.txt
+src/lab_g1_collect.egg-info/top_level.txt
