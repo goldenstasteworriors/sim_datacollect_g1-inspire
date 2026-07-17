@@ -1,8 +1,10 @@
+README.md
 pyproject.toml
 src/lab_g1_collect/__init__.py
 src/lab_g1_collect/cli.py
 src/lab_g1_collect/config.py
 src/lab_g1_collect/dataset.py
+src/lab_g1_collect/lerobot_export.py
 src/lab_g1_collect/retarget.py
 src/lab_g1_collect/trajectory.py
 src/lab_g1_collect.egg-info/PKG-INFO

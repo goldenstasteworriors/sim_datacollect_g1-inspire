@@ -41,6 +41,16 @@ lab-g1 validate outputs/lab_beaker_g1_inspire/episode_000000
 数据维度固定为右臂 7 + Inspire 右手 6，共 13 维。右手顺序与 Unitree 官方
 `DFX_inspire_service` 一致：`pinky, ring, middle, index, thumb_bend, thumb_rotation`。
 
+在装有 LeRobot 0.4.x 的 `labvla` 环境中可直接转换为官方数据格式：
+
+```bash
+conda activate labvla
+pip install -e .
+lab-g1 export-lerobot \
+  outputs/lab_beaker_g1_inspire/episode_000000 \
+  outputs/lerobot_lab_g1_beaker
+```
+
 ## HUG 推理
 
 官方示例输入可用于检查权重和 MANO：
@@ -77,6 +87,14 @@ python third_party/unitree_sim_isaaclab/sim_main.py \
   --enable_inspire_dds --robot_type g129
 ```
 
+无 DDS 的场景加载和物理单步检查使用：
+
+```bash
+PROJECT_ROOT="$PWD/third_party/unitree_sim_isaaclab" \
+PYTHONPATH="$PWD:$PWD/third_party/unitree_sim_isaaclab" \
+python -m lab_g1_collect.sim_smoke --device cpu --steps 2
+```
+
 真实 G1 部署沿用 Unitree 官方 DDS：手命令发布到 `rt/inspire/cmd`，状态从
 `rt/inspire/state` 读取。连接真机前应先在仿真检查关节方向、工作空间、碰撞与抓取力度。
 
@@ -86,4 +104,3 @@ python third_party/unitree_sim_isaaclab/sim_main.py \
 - 只有烧杯离桌并稳定保持的轨迹才标记为成功；碰桌、滑落和超关节限位必须拒收。
 - 保存源 RGB-D、HUG 抓取、机器人状态、动作和时间戳，便于重定向或重新渲染。
 - 透明玻璃的仿真深度可能失真，应在材质、光照、摩擦和质量上做域随机化。
-

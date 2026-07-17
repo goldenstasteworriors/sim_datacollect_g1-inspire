@@ -78,15 +78,22 @@ def main() -> None:
     mock.add_argument("--output")
     check = sub.add_parser("validate")
     check.add_argument("episode")
+    export = sub.add_parser("export-lerobot")
+    export.add_argument("episode")
+    export.add_argument("target")
+    export.add_argument("--repo-id", default="local/lab_g1_beaker")
     args = parser.parse_args()
     if args.command == "doctor":
         cmd_doctor(args.config)
     elif args.command == "mock-collect":
         cmd_mock_collect(args.config, args.output)
-    else:
+    elif args.command == "validate":
         print(json.dumps(validate_episode(args.episode), ensure_ascii=False, indent=2))
+    else:
+        from .lerobot_export import export_episode
+
+        print(export_episode(args.episode, args.target, args.repo_id))
 
 
 if __name__ == "__main__":
     main()
-
