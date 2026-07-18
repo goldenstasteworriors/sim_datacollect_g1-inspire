@@ -20,9 +20,13 @@ class EpisodeWriter:
         self.states: list[np.ndarray] = []
         self.actions: list[np.ndarray] = []
         self.depths: list[np.ndarray] = []
+        self.ee_actual: list[np.ndarray] = []
+        self.ee_target: list[np.ndarray] = []
 
     def add_frame(self, *, timestamp: float, state: np.ndarray, action: np.ndarray,
-                  images: dict[str, np.ndarray], depth: np.ndarray | None = None) -> None:
+                  images: dict[str, np.ndarray], depth: np.ndarray | None = None,
+                  ee_actual: np.ndarray | None = None,
+                  ee_target: np.ndarray | None = None) -> None:
         state = np.asarray(state, dtype=np.float32)
         action = np.asarray(action, dtype=np.float32)
         if state.shape != (13,) or action.shape != (13,):
@@ -38,6 +42,15 @@ class EpisodeWriter:
         self.actions.append(action)
         if depth is not None:
             self.depths.append(np.asarray(depth, dtype=np.float32))
+        if (ee_actual is None) != (ee_target is None):
+            raise ValueError("ee_actual 和 ee_target 必须同时提供")
+        if ee_actual is not None:
+            actual = np.asarray(ee_actual, dtype=np.float32)
+            target = np.asarray(ee_target, dtype=np.float32)
+            if actual.shape != (7,) or target.shape != (7,):
+                raise ValueError("末端位姿必须是 xyz + wxyz，共 7 维")
+            self.ee_actual.append(actual)
+            self.ee_target.append(target)
 
     def finish(self, *, status: str = "success", metrics: dict | None = None) -> Path:
         if not self.rows:
@@ -49,6 +62,11 @@ class EpisodeWriter:
             if len(self.depths) != len(self.rows):
                 raise RuntimeError("depth 帧数与 episode 帧数不一致")
             arrays["observation.depth"] = np.stack(self.depths)
+        if self.ee_actual:
+            if len(self.ee_actual) != len(self.rows):
+                raise RuntimeError("末端位姿帧数与 episode 帧数不一致")
+            arrays["observation.ee_pose_w"] = np.stack(self.ee_actual)
+            arrays["target.ee_pose_w"] = np.stack(self.ee_target)
         np.savez_compressed(self.work / "episode.npz", **arrays)
         (self.work / "frames.jsonl").write_text(
             "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in self.rows), encoding="utf-8"

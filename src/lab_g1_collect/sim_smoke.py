@@ -387,6 +387,10 @@ def main() -> None:
                     images={"front": front["rgb"][0, ..., :3].cpu().numpy(),
                             "right_wrist": wrist["rgb"][0, ..., :3].cpu().numpy()},
                     depth=front["distance_to_image_plane"][0].cpu().numpy(),
+                    ee_actual=ee_pose_w[0].cpu().numpy(),
+                    ee_target=np.r_[
+                        target_pos_w.cpu().numpy(), target_quat_w.cpu().numpy()
+                    ],
                 )
             manual_reset = keys.read() == "r"
             if manual_reset:
