@@ -128,12 +128,14 @@ def main() -> None:
                 grasp_rot = camera_rot @ wrist_camera_t[:3, :3]
                 grasp_quat = quat_from_matrix(grasp_rot.unsqueeze(0))[0]
                 hug_distance = float(torch.linalg.vector_norm(grasp_pos - object_pos))
-                if hug_distance > 0.25:
-                    raise RuntimeError(f"HUG 腕部预测距烧杯过远: {hug_distance:.3f} m")
+                planning_valid = hug_distance <= 0.25
+                planning_failure = None if planning_valid else f"HUG wrist distance {hug_distance:.3f} m > 0.25 m"
             else:
                 hand_target = np.array([0.85, 0.85, 0.8, 0.75, 0.7, 0.55], dtype=np.float32)
                 grasp_pos = object_pos + torch.tensor([0.0, -0.075, 0.035], device=env.device)
                 grasp_quat = robot.data.body_quat_w[0, right_hand_index].clone()
+                planning_valid = True
+                planning_failure = None
             start_pos = robot.data.body_pos_w[0, right_hand_index].clone()
             start_quat = robot.data.body_quat_w[0, right_hand_index].clone()
             direction = start_pos - grasp_pos
@@ -149,15 +151,24 @@ def main() -> None:
                 f"reachable={reachable}",
                 file=sys.stderr, flush=True,
             )
+            if not planning_valid:
+                print(
+                    f"[sim-collect] episode {index:06d} rejected before motion: {planning_failure}",
+                    file=sys.stderr, flush=True,
+                )
             return {
                 "start_pos": start_pos, "start_quat": start_quat,
                 "pregrasp_pos": pregrasp_pos, "grasp_pos": grasp_pos,
                 "lift_pos": lift_pos, "grasp_quat": grasp_quat,
                 "hand_target": np.asarray(hand_target, dtype=np.float32),
                 "uv_224": (u_224, v_224),
+                "planning_valid": planning_valid,
+                "planning_failure": planning_failure,
             }
 
         def target_for_phase(plan: dict, phase: int):
+            if not plan["planning_valid"]:
+                return plan["start_pos"], plan["start_quat"], np.zeros(6, dtype=np.float32)
             if phase < 100:
                 alpha = phase / 99.0
                 pos = torch.lerp(plan["start_pos"], plan["pregrasp_pos"], alpha)
@@ -232,6 +243,12 @@ def main() -> None:
             arm_current = robot.data.joint_pos[:, arm_joint_ids]
             arm_desired = ik.compute(ee_pos_b, ee_quat_b, jacobian, arm_current)[0]
             limits = robot.data.soft_joint_pos_limits[0, arm_joint_ids]
+            max_joint_step_rad = 0.02
+            arm_desired = torch.clamp(
+                arm_desired,
+                arm_current[0] - max_joint_step_rad,
+                arm_current[0] + max_joint_step_rad,
+            )
             arm_desired = torch.clamp(arm_desired, limits[:, 0], limits[:, 1])
             compact = np.r_[arm_desired.cpu().numpy(), hand_command].astype(np.float32)
             expanded = compact_to_isaac_action(compact, joint_names, default_pos)
@@ -269,6 +286,7 @@ def main() -> None:
                     "max_angular_speed_radps": float(samples[:, 3].max()),
                 }
                 checks = {
+                    "planning_valid": bool(plan["planning_valid"]),
                     "lift_ge_0.03m": metrics["min_lift_m"] >= 0.03,
                     "hand_distance_le_0.12m": metrics["max_hand_distance_m"] <= 0.12,
                     "linear_speed_le_0.15mps": metrics["max_linear_speed_mps"] <= 0.15,
