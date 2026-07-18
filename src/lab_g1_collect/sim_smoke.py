@@ -183,6 +183,7 @@ def main() -> None:
         else:
             current_episode_index = 0
         plan = plan_episode(current_episode_index)
+        print(f"[sim-collect] episode {current_episode_index:06d} planned", file=sys.stderr, flush=True)
         ik.reset()
         import contextlib
         with open("/dev/null", "w") as sink:
@@ -255,14 +256,26 @@ def main() -> None:
                 saved = writer.finish(status=status, metrics=metrics)
                 print(f"[sim-collect] {status}: {saved} {metrics}", file=sys.stderr, flush=True)
                 writer = None
-                if step + 1 < args.steps:
+                # Do not create a trailing .incomplete episode in finite runs.
+                if args.steps - (step + 1) >= cycle_steps:
+                    print("[sim-collect] resetting environment", file=sys.stderr, flush=True)
                     with contextlib.redirect_stdout(sink):
                         observation, _ = env.reset()
+                        # reset() restores physics state, but camera tensors may still
+                        # contain the previous episode's final render. Apply one default
+                        # control step so RGB-D and body transforms describe the reset scene.
+                        default_action = torch.tensor(default_pos, device=env.device).unsqueeze(0)
+                        observation, *_ = env.step(default_action)
                     initial_beaker_z = float(env.scene["object"].data.root_pos_w[0, 2])
                     stability_samples.clear()
                     writer, current_episode_index = next_writer()
+                    print(
+                        f"[sim-collect] episode {current_episode_index:06d} planning with fresh RGB-D",
+                        file=sys.stderr, flush=True,
+                    )
                     plan = plan_episode(current_episode_index)
                     ik.reset()
+                    print(f"[sim-collect] episode {current_episode_index:06d} running", file=sys.stderr, flush=True)
         report = {
             "task": task_id,
             "action_shape": list(env.action_space.shape),

@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 
 import isaaclab.sim as sim_utils
-from isaaclab.assets import RigidObjectCfg
+from isaaclab.assets import AssetBaseCfg, RigidObjectCfg
 from isaaclab.utils import configclass
 
 from tasks.g1_tasks.pick_place_cylinder_g1_29dof_inspire.pickplace_cylinder_g1_29dof_inspire_env_cfg import (
@@ -24,6 +24,19 @@ def _beaker_path() -> str:
 @configclass
 class LabBeakerSceneCfg(ObjectTableSceneCfg):
     """保留 Unitree 官方 G1+Inspire 本体、相机和桌面，仅替换抓取物。"""
+
+    # Unitree 的演示场景默认生成仓库和六张桌子。采集任务只保留机器人
+    # 正前方的一张桌子，减少 GUI 渲染与场景加载开销。
+    room_walls = None
+    packing_table_2 = None
+    packing_table_3 = None
+    packing_table_4 = None
+    packing_table_5 = None
+    packing_table_6 = None
+    ground = AssetBaseCfg(
+        prim_path="/World/GroundPlane",
+        spawn=sim_utils.GroundPlaneCfg(),
+    )
 
     front_camera = CameraPresets.g1_front_camera()
     front_camera.data_types = ["rgb", "distance_to_image_plane"]
