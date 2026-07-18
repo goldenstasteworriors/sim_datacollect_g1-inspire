@@ -101,6 +101,14 @@ python -m lab_g1_collect.sim_smoke --device cpu --steps 2
 ```
 
 PC 桌面可视化可使用 `--no-headless`，并把 `--steps` 设置为期望保持窗口的物理步数。
+加入 `--auto-collect --output outputs/gui_collect` 后，每 450 个物理步完成一轮采集；
+无论成功或失败都会自动 reset 机器人和烧杯并开始下一轮。成功目录名为
+`episode_NNNNNN`，失败目录名为 `episode_NNNNNN.failed`，两者的 `metadata.json`
+都包含判定指标。
+
+成功要求最后 30 个物理步同时满足：烧杯相对初始高度始终不低于 3 cm、烧杯与
+右手基座距离始终不超过 12 cm、烧杯线速度不超过 0.15 m/s、角速度不超过
+1.0 rad/s；任意条件不满足即判失败。
 
 真实 G1 部署沿用 Unitree 官方 DDS：手命令发布到 `rt/inspire/cmd`，状态从
 `rt/inspire/state` 读取。连接真机前应先在仿真检查关节方向、工作空间、碰撞与抓取力度。
