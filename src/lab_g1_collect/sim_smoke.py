@@ -82,12 +82,31 @@ def main() -> None:
         print("[sim-smoke] config parsed", file=sys.stderr, flush=True)
         env = gym.make(task_id, cfg=cfg).unwrapped
         print("[sim-smoke] environment created", file=sys.stderr, flush=True)
-        observation, _ = env.reset()
-        # Actions are relative to the configured default joint pose. Let the
-        # object settle and refresh camera tensors before planning from RGB-D.
         zero_action = torch.zeros(env.action_space.shape, device=env.device)
-        for _ in range(20):
+
+        def reset_scene():
+            observation, _ = env.reset()
+            obj = env.scene["object"]
+            default_state = obj.data.default_root_state.clone()
+            default_state[:, :3] += env.scene.env_origins
+            obj.write_root_pose_to_sim(default_state[:, :7])
+            obj.write_root_velocity_to_sim(torch.zeros_like(default_state[:, 7:13]))
+            env.scene.write_data_to_sim()
+            # Actions are relative to the configured default joint pose. Let the
+            # object settle and refresh camera tensors before planning from RGB-D.
+            for _ in range(20):
+                observation, *_ = env.step(zero_action)
+            # Settling can still move a previously grasped object through residual
+            # contacts. Restore it once more after the robot has reached reset pose.
+            obj.write_root_pose_to_sim(default_state[:, :7])
+            obj.write_root_velocity_to_sim(torch.zeros_like(default_state[:, 7:13]))
+            env.scene.write_data_to_sim()
             observation, *_ = env.step(zero_action)
+            position = obj.data.root_pos_w[0].cpu().tolist()
+            print(f"[sim-collect] object reset xyz={position}", file=sys.stderr, flush=True)
+            return observation
+
+        observation = reset_scene()
         print("[sim-smoke] environment reset", file=sys.stderr, flush=True)
         print(
             "[sim-smoke] beaker xyz",
@@ -402,11 +421,7 @@ def main() -> None:
                 if enough_for_next or (manual_reset and step + 1 < args.steps):
                     print("[sim-collect] resetting environment", file=sys.stderr, flush=True)
                     with contextlib.redirect_stdout(sink):
-                        observation, _ = env.reset()
-                        # The action term uses the robot's default pose as an offset,
-                        # so zero (not default_pos) is the correct hold command.
-                        for _ in range(20):
-                            observation, *_ = env.step(zero_action)
+                        observation = reset_scene()
                     initial_beaker_z = float(env.scene["object"].data.root_pos_w[0, 2])
                     initial_hand_z = float(robot.data.body_pos_w[0, right_hand_index, 2])
                     arm_command = torch.tensor(arm_default, device=env.device)
