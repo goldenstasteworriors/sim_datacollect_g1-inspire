@@ -51,6 +51,10 @@ def main() -> None:
 
     project = Path(__file__).resolve().parents[2]
     unitree = project / "third_party/unitree_sim_isaaclab"
+    # Unitree's scene modules resolve their checked-in USD assets from this
+    # variable at import time. Set a local default so launching this module does
+    # not depend on the caller exporting PROJECT_ROOT first.
+    os.environ.setdefault("PROJECT_ROOT", str(unitree))
     sys.path.insert(0, str(project))
     sys.path.insert(0, str(unitree))
 
