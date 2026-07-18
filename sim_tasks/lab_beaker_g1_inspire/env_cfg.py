@@ -44,9 +44,6 @@ class LabBeakerSceneCfg(ObjectTableSceneCfg):
             visual_material=sim_utils.PreviewSurfaceCfg(
                 diffuse_color=(0.05, 0.35, 0.95), metallic=0.05, roughness=0.35,
             ),
-            physics_material=sim_utils.RigidBodyMaterialCfg(
-                friction_combine_mode="max", static_friction=2.0, dynamic_friction=1.8,
-            ),
         ),
     )
 
