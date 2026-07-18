@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import random
 import select
 import sys
 import termios
@@ -44,6 +45,8 @@ def main() -> None:
     parser.add_argument("--use-hug", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--object-shape", choices=("beaker", "box", "cylinder", "sphere"), default="beaker")
     parser.add_argument("--hand-closure-scale", type=float, default=1.0)
+    parser.add_argument("--hug-sampling-steps", type=int, default=5)
+    parser.add_argument("--hug-candidates", type=int, default=8)
     parser.add_argument("--debug-ik", action="store_true")
     parser.add_argument(
         "--ik-command-integration", type=float, default=0.95,
@@ -54,11 +57,14 @@ def main() -> None:
         help="每个控制步允许 DLS 位置目标领先当前关节的最大弧度",
     )
     parser.add_argument(
-        "--ik-max-command-lead", type=float, default=0.05,
+        "--ik-max-command-lead", type=float, default=0.15,
         help="位置命令相对实测关节的最大领先弧度，用于抑制累积超调",
     )
     parser.add_argument("--output", default="outputs/gui_collect")
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--object-randomization-m", type=float, default=0.04)
     args = parser.parse_args()
+    episode_rng = random.Random(args.seed)
     os.environ["LAB_OBJECT_SHAPE"] = args.object_shape
 
     project = Path(__file__).resolve().parents[2]
@@ -105,6 +111,9 @@ def main() -> None:
             obj = env.scene["object"]
             default_state = obj.data.default_root_state.clone()
             default_state[:, :3] += env.scene.env_origins
+            randomization = max(0.0, args.object_randomization_m)
+            default_state[:, 0] += episode_rng.uniform(-randomization, randomization)
+            default_state[:, 1] += episode_rng.uniform(-randomization, randomization)
             obj.write_root_pose_to_sim(default_state[:, :7])
             obj.write_root_velocity_to_sim(torch.zeros_like(default_state[:, 7:13]))
             env.scene.write_data_to_sim()
@@ -204,6 +213,8 @@ def main() -> None:
                     depth_m=front.output["distance_to_image_plane"][0].cpu().numpy(),
                     K=K_tensor.cpu().numpy(), point_uv_224=(u_224, v_224),
                     object_name=args.object_shape,
+                    sampling_steps=args.hug_sampling_steps,
+                    candidates=args.hug_candidates,
                 )
                 wrist_camera_t = torch.tensor(wrist_camera, device=env.device)
                 grasp_pos = camera_pos + camera_rot @ wrist_camera_t[:3, 3]
@@ -387,6 +398,8 @@ def main() -> None:
                 + integration * (arm_command - arm_current[0])
             )
             command_lead = float(np.clip(args.ik_max_command_lead, 0.01, 0.15))
+            if pregrasp_end <= phase < grasp_end:
+                command_lead *= 2.0 / 3.0
             arm_desired = torch.clamp(
                 arm_desired, arm_current[0] - command_lead, arm_current[0] + command_lead
             )

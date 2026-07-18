@@ -151,7 +151,7 @@ def _save_hug_output_debug(
 def run_hug_capture(
     *, project: Path, episode_index: int, rgb: np.ndarray, depth_m: np.ndarray,
     K: np.ndarray, point_uv_224: tuple[float, float], object_name: str = "beaker",
-    sampling_steps: int = 10,
+    sampling_steps: int = 5, candidates: int = 8, debug_stride: int = 10,
 ) -> tuple[np.ndarray, np.ndarray]:
     run_dir = project / "outputs" / "hug_runtime" / f"episode_{episode_index:06d}"
     dataset = run_dir / "dataset"
@@ -170,7 +170,9 @@ def run_hug_capture(
         K=K, u_224=np.float32(point_uv_224[0]),
         v_224=np.float32(point_uv_224[1]), object_name=np.asarray(object_name),
     )
-    _save_hug_input_debug(run_dir, rgb, depth_mm, K, point_uv_224, object_name)
+    save_debug = debug_stride > 0 and episode_index % debug_stride == 0
+    if save_debug:
+        _save_hug_input_debug(run_dir, rgb, depth_mm, K, point_uv_224, object_name)
     env = os.environ.copy()
     env.update({
         "PYTHONPATH": f"{project / 'src'}:{project / 'third_party/hug'}",
@@ -188,9 +190,11 @@ def run_hug_capture(
         "python", "-m", "lab_g1_collect.hug_runtime", str(capture), str(dataset),
         str(project / "checkpoints/hug/hug_full.safetensors"),
         "--sampling-steps", str(sampling_steps),
+        "--candidates", str(candidates),
     ]
     subprocess.run(command, cwd=project, env=env, check=True, timeout=180)
     prediction_path = dataset / "grasp_pred" / "sim_capture.pkl"
     wrist, landmarks = load_hug_geometry(prediction_path)
-    _save_hug_output_debug(run_dir, rgb, K, wrist, landmarks)
+    if save_debug:
+        _save_hug_output_debug(run_dir, rgb, K, wrist, landmarks)
     return load_hug_prediction(prediction_path)
