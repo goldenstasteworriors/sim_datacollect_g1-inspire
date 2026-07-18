@@ -79,7 +79,8 @@ def main() -> None:
             from .dataset import EpisodeWriter
             root = Path(args.output)
             episode_index = 0
-            while (root / f"episode_{episode_index:06d}").exists():
+            while ((root / f"episode_{episode_index:06d}").exists() or
+                   (root / f"episode_{episode_index:06d}.incomplete").exists()):
                 episode_index += 1
             writer = EpisodeWriter(root, episode_index, {
                 "instruction": "用右手抓起烧杯并抬升",
