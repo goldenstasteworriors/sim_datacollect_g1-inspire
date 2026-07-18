@@ -49,6 +49,12 @@ def main() -> None:
         candidate_names.append(name)
     candidate_list = args.dataset / "candidate_samples.txt"
     candidate_list.write_text("\n".join(candidate_names) + "\n", encoding="utf-8")
+    # GraspDataset caches discovered stems in samples.txt. Runtime episode
+    # directories can be reused after an interrupted run, so an old one-entry
+    # cache would make the freshly created candidate indices invalid.
+    (args.dataset / "samples.txt").write_text(
+        "\n".join(candidate_names) + "\n", encoding="utf-8"
+    )
     np.random.seed(args.seed)
     import torch
     torch.manual_seed(args.seed)
