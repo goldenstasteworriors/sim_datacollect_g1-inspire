@@ -19,6 +19,10 @@ def main() -> None:
     sys.path.insert(0, str(project))
     sys.path.insert(0, str(unitree))
 
+    # Match Unitree's official launcher order so Pinocchio resolves its bundled
+    # Assimp symbols before Isaac Kit loads another Assimp build.
+    import pinocchio  # noqa: F401
+
     from isaaclab.app import AppLauncher
 
     launcher = AppLauncher(headless=args.headless, enable_cameras=True)
