@@ -46,7 +46,7 @@ def main() -> None:
     parser.add_argument("--hand-closure-scale", type=float, default=1.0)
     parser.add_argument("--debug-ik", action="store_true")
     parser.add_argument(
-        "--ik-command-integration", type=float, default=0.85,
+        "--ik-command-integration", type=float, default=0.95,
         help="将当前 DLS 修正累积到上次位置命令的比例（0 表示不累积）",
     )
     parser.add_argument("--output", default="outputs/gui_collect")
@@ -146,7 +146,11 @@ def main() -> None:
         import numpy as np
 
         arm_default = np.array([default_pos[joint_names.index(name)] for name in RIGHT_ARM_JOINTS], dtype=np.float32)
-        cycle_steps = 450
+        pregrasp_end = 150
+        grasp_end = 300
+        close_end = 400
+        lift_end = 550
+        cycle_steps = 600
         arm_joint_ids = [joint_names.index(name) for name in RIGHT_ARM_JOINTS]
         right_hand_index = env.scene["robot"].body_names.index("right_hand_base_link")
         right_finger_indices = [
@@ -257,22 +261,22 @@ def main() -> None:
         def target_for_phase(plan: dict, phase: int):
             if not plan["planning_valid"]:
                 return plan["start_pos"], plan["start_quat"], np.zeros(6, dtype=np.float32)
-            if phase < 100:
-                alpha = phase / 99.0
+            if phase < pregrasp_end:
+                alpha = phase / float(pregrasp_end - 1)
                 pos = torch.lerp(plan["start_pos"], plan["pregrasp_pos"], alpha)
                 quat = quat_slerp(plan["start_quat"], plan["grasp_quat"], alpha)
                 hand = np.zeros(6, dtype=np.float32)
-            elif phase < 180:
-                alpha = (phase - 100) / 79.0
+            elif phase < grasp_end:
+                alpha = (phase - pregrasp_end) / float(grasp_end - pregrasp_end - 1)
                 pos = torch.lerp(plan["pregrasp_pos"], plan["grasp_pos"], alpha)
                 quat = plan["grasp_quat"]
                 hand = np.zeros(6, dtype=np.float32)
-            elif phase < 280:
-                alpha = (phase - 180) / 99.0
+            elif phase < close_end:
+                alpha = (phase - grasp_end) / float(close_end - grasp_end - 1)
                 pos, quat = plan["grasp_pos"], plan["grasp_quat"]
                 hand = plan["hand_target"] * (alpha * alpha * (3.0 - 2.0 * alpha))
-            elif phase < 400:
-                alpha = (phase - 280) / 119.0
+            elif phase < lift_end:
+                alpha = (phase - close_end) / float(lift_end - close_end - 1)
                 pos = torch.lerp(plan["grasp_pos"], plan["lift_pos"], alpha)
                 quat, hand = plan["grasp_quat"], plan["hand_target"]
             else:
@@ -335,7 +339,7 @@ def main() -> None:
                 ee_pos_b, ee_quat_b, target_pos_b, target_quat_b, rot_error_type="axis_angle"
             )
             damping = 0.05
-            if phase < 280:
+            if phase < close_end:
                 task_weights = torch.tensor(
                     [1.0, 1.0, 1.0, 0.25, 0.25, 0.25], device=env.device
                 )
@@ -356,7 +360,10 @@ def main() -> None:
             ).squeeze(-1)
             # Preserve the DLS direction when limiting velocity. Independent
             # per-joint clipping distorts the Cartesian direction near singularities.
-            max_joint_step_rad = 0.02
+            # The final Cartesian approach is deliberately slower than free-
+            # space motion so the implicit actuators track the straight target
+            # without overshooting and correcting backwards near the object.
+            max_joint_step_rad = 0.01 if pregrasp_end <= phase < grasp_end else 0.02
             scale = torch.clamp(
                 max_joint_step_rad / torch.clamp(delta_joint[0].abs().max(), min=1e-9), max=1.0
             )
@@ -373,7 +380,10 @@ def main() -> None:
             limits = robot.data.soft_joint_pos_limits[0, arm_joint_ids]
             arm_desired = torch.clamp(arm_desired, limits[:, 0], limits[:, 1])
             arm_command = arm_desired.detach()
-            if args.debug_ik and phase in (0, 179, 279, 300, 399, 449):
+            if args.debug_ik and phase in (
+                0, pregrasp_end - 1, grasp_end - 1,
+                close_end - 1, lift_end - 1, cycle_steps - 1,
+            ):
                 predicted_delta = torch.mv(task_jacobian[0], arm_desired - arm_current[0])
                 print(
                     f"[IK debug] phase={phase} ee={ee_pose_w[0, :3].cpu().tolist()} "
