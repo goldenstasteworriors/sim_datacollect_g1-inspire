@@ -25,6 +25,9 @@ def _beaker_path() -> str:
 class LabBeakerSceneCfg(ObjectTableSceneCfg):
     """保留 Unitree 官方 G1+Inspire 本体、相机和桌面，仅替换抓取物。"""
 
+    front_camera = CameraPresets.g1_front_camera()
+    front_camera.data_types = ["rgb", "distance_to_image_plane"]
+
     object = RigidObjectCfg(
         prim_path="/World/envs/env_.*/Object",
         init_state=RigidObjectCfg.InitialStateCfg(pos=(-0.35, 0.40, 0.82), rot=(1.0, 0.0, 0.0, 0.0)),
@@ -45,6 +48,3 @@ class LabBeakerSceneCfg(ObjectTableSceneCfg):
 @configclass
 class LabBeakerG1InspireEnvCfg(PickPlaceG129InspireBaseFixEnvCfg):
     scene: LabBeakerSceneCfg = LabBeakerSceneCfg(num_envs=1, env_spacing=2.5, replicate_physics=True)
-
-
-LabBeakerSceneCfg.front_camera.data_types = ["rgb", "distance_to_image_plane"]
