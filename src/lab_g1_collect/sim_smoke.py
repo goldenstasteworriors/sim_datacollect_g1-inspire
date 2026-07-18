@@ -70,7 +70,7 @@ def main() -> None:
                 xyz = robot.data.body_pos_w[0, body_index].cpu().tolist()
                 print(f"[sim-smoke] body {body_name} xyz {xyz}", file=sys.stderr, flush=True)
         from isaaclab.controllers import DifferentialIKController, DifferentialIKControllerCfg
-        from isaaclab.utils.math import matrix_from_quat, quat_from_matrix, quat_slerp, subtract_frame_transforms
+        from isaaclab.utils.math import matrix_from_quat, quat_from_matrix, quat_inv, quat_slerp, subtract_frame_transforms
         from .sim_action import RIGHT_ARM_JOINTS, compact_to_isaac_action
 
         joint_names = list(env.scene["robot"].joint_names)
@@ -202,6 +202,9 @@ def main() -> None:
             )
             ik.set_command(target_pos_b, ee_quat=ee_quat_b)
             jacobian = robot.root_physx_view.get_jacobians()[:, jacobian_index, :, arm_joint_ids]
+            world_to_base = matrix_from_quat(quat_inv(root_pose[:, 3:7]))
+            jacobian[:, :3, :] = torch.bmm(world_to_base, jacobian[:, :3, :])
+            jacobian[:, 3:, :] = torch.bmm(world_to_base, jacobian[:, 3:, :])
             arm_current = robot.data.joint_pos[:, arm_joint_ids]
             arm_desired = ik.compute(ee_pos_b, ee_quat_b, jacobian, arm_current)[0]
             limits = robot.data.soft_joint_pos_limits[0, arm_joint_ids]
