@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#101415" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22><circle cx=%2216%22 cy=%2216%22 r=%2212%22 fill=%22%23b8d95a%22/></svg>" />
+    <title>MANO × Inspire 相对位姿标定</title>
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="viewport-panel" aria-label="三维模型视图">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">RETARGET CALIBRATION / RIGHT HAND</p>
+            <h1>MANO 0 ↔ Inspire Base</h1>
+          </div>
+          <div class="legend" aria-label="模型图例">
+            <span><i class="swatch mano"></i>MANO 开手</span>
+            <span><i class="swatch inspire"></i>Inspire 开手</span>
+          </div>
+        </header>
+        <div id="scene" role="img" aria-label="半透明 MANO 与 Inspire 右手模型叠加视图"></div>
+        <div class="view-tools" aria-label="三维操作模式">
+          <button type="button" data-mode="translate" class="active">移动 <kbd>W</kbd></button>
+          <button type="button" data-mode="rotate">旋转 <kbd>E</kbd></button>
+          <button type="button" id="fit-view">适配视图 <kbd>F</kbd></button>
+        </div>
+        <p class="viewport-help">拖动彩色手柄调整 Inspire base；空白处左键旋转视角，滚轮缩放。</p>
+      </section>
+
+      <aside class="control-panel" aria-label="相对位姿控制面板">
+        <section class="status-block">
+          <div class="status-line"><span class="status-dot"></span>当前代码初始值已载入</div>
+          <p>坐标表达在 MANO wrist（0 点）坐标系。平移单位 mm，旋转为 XYZ 欧拉角。</p>
+        </section>
+
+        <section>
+          <div class="section-heading"><h2>平移</h2><span>mm</span></div>
+          <div id="translation-controls" class="control-stack"></div>
+        </section>
+
+        <section>
+          <div class="section-heading"><h2>旋转</h2><span>deg · XYZ</span></div>
+          <div id="rotation-controls" class="control-stack"></div>
+        </section>
+
+        <section>
+          <div class="section-heading"><h2>显示</h2><span>opacity</span></div>
+          <div id="opacity-controls" class="control-stack"></div>
+        </section>
+
+        <section class="matrix-section">
+          <div class="section-heading"><h2>相对位姿矩阵</h2><span>T<sub>MANO0→BASE</sub></span></div>
+          <pre id="matrix-output" tabindex="0" aria-label="当前四乘四相对位姿矩阵"></pre>
+          <dl class="meta-grid">
+            <div><dt>旧掌长比例</dt><dd>1.45×</dd></div>
+            <div><dt>控制对象</dt><dd>Inspire base</dd></div>
+          </dl>
+        </section>
+
+        <footer class="actions">
+          <button type="button" id="reset-pose" class="secondary">恢复当前代码值</button>
+          <button type="button" id="copy-pose" class="primary">复制参数 JSON</button>
+        </footer>
+        <p id="toast" role="status" aria-live="polite"></p>
+      </aside>
+    </main>
+    <script type="module" src="/src/app.js"></script>
+  </body>
+</html>
