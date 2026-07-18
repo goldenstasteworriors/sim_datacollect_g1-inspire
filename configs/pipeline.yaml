@@ -17,7 +17,7 @@ task:
   instruction: "用右手抓起烧杯并抬升"
   asset_path: assets/labutopia/Beaker_01.usd
   object_prim_path: /World/envs/env_.*/Object
-  object_position: [-0.35, 0.40, 0.82]
+  object_position: [0.002, 0.31, 0.82]
   episode_seconds: 4.0
   fps: 30
   phases:
@@ -37,4 +37,3 @@ dataset:
   camera_names: [front, right_wrist]
   image_size: [256, 256]
   store_depth: true
-

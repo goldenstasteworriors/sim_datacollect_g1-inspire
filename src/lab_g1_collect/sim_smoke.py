@@ -76,8 +76,8 @@ def main() -> None:
         import numpy as np
 
         arm_default = np.array([default_pos[joint_names.index(name)] for name in RIGHT_ARM_JOINTS], dtype=np.float32)
-        grasp_arm = np.array([0.35, -0.30, 0.10, 1.05, 0.0, 0.42, 0.0], dtype=np.float32)
-        lift_arm = grasp_arm + np.array([-0.12, 0, 0, -0.18, 0, 0, 0], dtype=np.float32)
+        grasp_arm = arm_default.copy()
+        lift_arm = grasp_arm + np.array([0.22, 0, 0, 0, 0, 0, 0], dtype=np.float32)
         trajectory = generate_grasp_trajectory(
             arm_default, grasp_arm, lift_arm,
             np.array([0.85, 0.85, 0.8, 0.75, 0.7, 0.55], dtype=np.float32),
@@ -101,6 +101,7 @@ def main() -> None:
             })
         import contextlib
         with open("/dev/null", "w") as sink:
+          initial_beaker_z = float(env.scene["object"].data.root_pos_w[0, 2])
           for step in range(args.steps):
             compact = trajectory[step % len(trajectory)]
             expanded = compact_to_isaac_action(compact, joint_names, default_pos)
@@ -120,6 +121,8 @@ def main() -> None:
                     depth=front["distance_to_image_plane"][0].cpu().numpy(),
                 )
             if writer is not None and step == len(trajectory) - 1:
+                lifted = float(env.scene["object"].data.root_pos_w[0, 2]) - initial_beaker_z
+                print(f"[sim-collect] beaker lift {lifted:.4f} m", file=sys.stderr, flush=True)
                 print(f"[sim-collect] saved {writer.finish()}", file=sys.stderr, flush=True)
                 writer = None
         report = {

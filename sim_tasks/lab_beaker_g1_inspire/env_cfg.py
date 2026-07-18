@@ -30,7 +30,7 @@ class LabBeakerSceneCfg(ObjectTableSceneCfg):
 
     object = RigidObjectCfg(
         prim_path="/World/envs/env_.*/Object",
-        init_state=RigidObjectCfg.InitialStateCfg(pos=(-0.35, 0.40, 0.82), rot=(1.0, 0.0, 0.0, 0.0)),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=(0.002, 0.31, 0.82), rot=(1.0, 0.0, 0.0, 0.0)),
         spawn=sim_utils.UsdFileCfg(
             usd_path=_beaker_path(),
             scale=(0.01, 0.01, 0.01),
