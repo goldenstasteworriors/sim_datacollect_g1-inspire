@@ -58,7 +58,7 @@ lab-g1 export-lerobot \
 ```bash
 conda activate hug
 python -m hug.prepare_inputs --dataset-path third_party/hug/data/custom
-python -m lab_g1_collect.hug_condition \
+PYTHONPATH=src python -m lab_g1_collect.hug_condition \
   third_party/hug/data/custom/custom.pkl --u 122 --v 105
 python -m hug.inference \
   --checkpoint-path checkpoints/hug/hug_full.safetensors \
