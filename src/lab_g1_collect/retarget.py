@@ -7,13 +7,15 @@ from pathlib import Path
 import numpy as np
 
 
-# MANO wrist frame -> Inspire right-hand mounting frame.  Keep this calibration
-# explicit: HUG predicts a human wrist frame, while arm IK controls the robot's
-# right_hand_base_link.  Values are wxyz and metres and can be replaced after a
-# physical hand-eye calibration without changing the inference/control code.
-MANO_WRIST_TO_INSPIRE_TRANSLATION_M = np.array([0.0, 0.0, 0.025], dtype=np.float32)
-MANO_WRIST_TO_INSPIRE_QUAT_WXYZ = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
-INSPIRE_TO_MANO_PALM_LENGTH_RATIO = 1.45
+# MANO wrist frame -> Inspire right-hand mounting frame. HUG predicts the MANO
+# wrist pose; this interactively calibrated rigid transform places the Inspire
+# base in that frame. Translation is in metres.
+T_MANO_WRIST_INSPIRE_BASE = np.array([
+    [0.0, 0.988228365, 0.152985825, 0.0285],
+    [0.994521906, 0.015991374, -0.103297986, 0.0027],
+    [-0.104528464, 0.152147761, -0.982814690, 0.0063],
+    [0.0, 0.0, 0.0, 1.0],
+], dtype=np.float32)
 
 # Official Unitree xr_teleoperate Inspire configuration. HUG/MANO uses 21
 # landmarks, while Unitree's XR stream uses 25 slots with fingertips at
@@ -30,21 +32,8 @@ INSPIRE_API_JOINT_NAMES = (
 )
 
 
-def _matrix_from_quat_wxyz(quat: np.ndarray) -> np.ndarray:
-    w, x, y, z = np.asarray(quat, dtype=np.float64)
-    return np.array([
-        [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
-        [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
-        [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
-    ], dtype=np.float32)
-
-
 def mano_wrist_to_inspire_pose(wrist: np.ndarray, landmarks_3d: np.ndarray | None = None) -> np.ndarray:
-    """将 HUG/MANO 腕位姿变换为 Inspire 手掌安装基座位姿。
-
-    有21点骨架时，直接用掌面几何重建朝向，避免把 MANO 内部坐标轴误当作
-    Inspire 安装轴。Inspire 四指沿本体 -Y 伸展，食指到小指方向对应 -Z。
-    """
+    """用交互标定的刚体变换将 HUG/MANO 腕位姿转换到 Inspire base。"""
     wrist = np.asarray(wrist, dtype=np.float32)
     if wrist.shape != (4, 4) or not np.isfinite(wrist).all():
         raise ValueError(f"T_camera_wrist 应为有限值 (4, 4)，实际为 {wrist.shape}")
@@ -52,27 +41,7 @@ def mano_wrist_to_inspire_pose(wrist: np.ndarray, landmarks_3d: np.ndarray | Non
         points = np.asarray(landmarks_3d, dtype=np.float32)
         if points.shape != (21, 3) or not np.isfinite(points).all():
             raise ValueError(f"landmarks_3d 应为有限值 (21, 3)，实际为 {points.shape}")
-        origin = points[0]
-        mcp_center = points[[5, 9, 13, 17]].mean(axis=0)
-        finger_forward = mcp_center - origin
-        finger_forward /= max(np.linalg.norm(finger_forward), 1e-8)
-        index_to_pinky = points[17] - points[5]
-        index_to_pinky -= finger_forward * np.dot(index_to_pinky, finger_forward)
-        index_to_pinky /= max(np.linalg.norm(index_to_pinky), 1e-8)
-        x_axis = np.cross(index_to_pinky, finger_forward)
-        x_axis /= max(np.linalg.norm(x_axis), 1e-8)
-        y_axis = -finger_forward
-        z_axis = index_to_pinky
-        result = np.eye(4, dtype=np.float32)
-        result[:3, :3] = np.column_stack((x_axis, y_axis, z_axis))
-        mano_palm_vector = mcp_center - origin
-        result[:3, 3] = mcp_center - INSPIRE_TO_MANO_PALM_LENGTH_RATIO * mano_palm_vector
-        return result
-
-    wrist_to_inspire = np.eye(4, dtype=np.float32)
-    wrist_to_inspire[:3, :3] = _matrix_from_quat_wxyz(MANO_WRIST_TO_INSPIRE_QUAT_WXYZ)
-    wrist_to_inspire[:3, 3] = MANO_WRIST_TO_INSPIRE_TRANSLATION_M
-    return wrist @ wrist_to_inspire
+    return wrist @ T_MANO_WRIST_INSPIRE_BASE
 
 
 class _NumpyCompatibleUnpickler(pickle.Unpickler):
