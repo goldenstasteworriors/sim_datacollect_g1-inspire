@@ -46,8 +46,12 @@ def main() -> None:
     parser.add_argument("--hand-closure-scale", type=float, default=1.0)
     parser.add_argument("--debug-ik", action="store_true")
     parser.add_argument(
-        "--ik-command-integration", type=float, default=0.95,
+        "--ik-command-integration", type=float, default=0.0,
         help="将当前 DLS 修正累积到上次位置命令的比例（0 表示不累积）",
+    )
+    parser.add_argument(
+        "--ik-max-joint-step", type=float, default=0.08,
+        help="每个控制步允许 DLS 位置目标领先当前关节的最大弧度",
     )
     parser.add_argument("--output", default="outputs/gui_collect")
     args = parser.parse_args()
@@ -363,7 +367,9 @@ def main() -> None:
             # The final Cartesian approach is deliberately slower than free-
             # space motion so the implicit actuators track the straight target
             # without overshooting and correcting backwards near the object.
-            max_joint_step_rad = 0.01 if pregrasp_end <= phase < grasp_end else 0.02
+            max_joint_step_rad = float(np.clip(args.ik_max_joint_step, 0.005, 0.15))
+            if pregrasp_end <= phase < grasp_end:
+                max_joint_step_rad *= 0.5
             scale = torch.clamp(
                 max_joint_step_rad / torch.clamp(delta_joint[0].abs().max(), min=1e-9), max=1.0
             )
