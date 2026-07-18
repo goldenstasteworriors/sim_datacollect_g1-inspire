@@ -44,6 +44,9 @@ class LabBeakerSceneCfg(ObjectTableSceneCfg):
             visual_material=sim_utils.PreviewSurfaceCfg(
                 diffuse_color=(0.05, 0.35, 0.95), metallic=0.05, roughness=0.35,
             ),
+            physics_material=sim_utils.RigidBodyMaterialCfg(
+                friction_combine_mode="max", static_friction=2.0, dynamic_friction=1.8,
+            ),
         ),
     )
 
@@ -51,3 +54,7 @@ class LabBeakerSceneCfg(ObjectTableSceneCfg):
 @configclass
 class LabBeakerG1InspireEnvCfg(PickPlaceG129InspireBaseFixEnvCfg):
     scene: LabBeakerSceneCfg = LabBeakerSceneCfg(num_envs=1, env_spacing=2.5, replicate_physics=True)
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.events.reset_object.params["pose_range"] = {"x": (0.0, 0.0), "y": (0.0, 0.0)}

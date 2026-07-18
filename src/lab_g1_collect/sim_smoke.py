@@ -123,7 +123,10 @@ def main() -> None:
             if writer is not None and step == len(trajectory) - 1:
                 lifted = float(env.scene["object"].data.root_pos_w[0, 2]) - initial_beaker_z
                 print(f"[sim-collect] beaker lift {lifted:.4f} m", file=sys.stderr, flush=True)
-                print(f"[sim-collect] saved {writer.finish()}", file=sys.stderr, flush=True)
+                if lifted >= 0.03:
+                    print(f"[sim-collect] saved {writer.finish()}", file=sys.stderr, flush=True)
+                else:
+                    print("[sim-collect] rejected; episode remains incomplete", file=sys.stderr, flush=True)
                 writer = None
         report = {
             "task": task_id,
