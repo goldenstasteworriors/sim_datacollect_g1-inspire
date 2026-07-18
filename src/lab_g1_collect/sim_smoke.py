@@ -45,6 +45,10 @@ def main() -> None:
     parser.add_argument("--object-shape", choices=("beaker", "box", "cylinder", "sphere"), default="beaker")
     parser.add_argument("--hand-closure-scale", type=float, default=1.0)
     parser.add_argument("--debug-ik", action="store_true")
+    parser.add_argument(
+        "--ik-command-integration", type=float, default=0.85,
+        help="将当前 DLS 修正累积到上次位置命令的比例（0 表示不累积）",
+    )
     parser.add_argument("--output", default="outputs/gui_collect")
     args = parser.parse_args()
     os.environ["LAB_OBJECT_SHAPE"] = args.object_shape
@@ -356,12 +360,15 @@ def main() -> None:
             scale = torch.clamp(
                 max_joint_step_rad / torch.clamp(delta_joint[0].abs().max(), min=1e-9), max=1.0
             )
-            # DLS computes a displacement from the measured q_current. Adding
-            # it to the previous command integrates the same tracking error
-            # repeatedly while the actuator lags, causing overshoot and a
-            # visible move-back segment near the grasp. Use standard resolved-
-            # rate IK: q_target = q_current + delta_q.
-            arm_desired = arm_current[0] + delta_joint[0] * scale
+            # A pure q_current + delta_q command is too soft for this implicit
+            # position actuator, while full accumulation repeatedly integrates
+            # tracking error and overshoots. Blend a bounded fraction of the
+            # DLS correction into the previous command as actuator feed-forward.
+            integration = float(np.clip(args.ik_command_integration, 0.0, 1.0))
+            arm_desired = (
+                arm_current[0] + delta_joint[0] * scale
+                + integration * (arm_command - arm_current[0])
+            )
             arm_desired = torch.clamp(arm_desired, arm_current[0] - 0.15, arm_current[0] + 0.15)
             limits = robot.data.soft_joint_pos_limits[0, arm_joint_ids]
             arm_desired = torch.clamp(arm_desired, limits[:, 0], limits[:, 1])
