@@ -356,9 +356,12 @@ def main() -> None:
             scale = torch.clamp(
                 max_joint_step_rad / torch.clamp(delta_joint[0].abs().max(), min=1e-9), max=1.0
             )
-            arm_desired = arm_command + delta_joint[0] * scale
-            # Keep a persistent command so actuator tracking lag does not erase
-            # unfinished motion at the next control step.
+            # DLS computes a displacement from the measured q_current. Adding
+            # it to the previous command integrates the same tracking error
+            # repeatedly while the actuator lags, causing overshoot and a
+            # visible move-back segment near the grasp. Use standard resolved-
+            # rate IK: q_target = q_current + delta_q.
+            arm_desired = arm_current[0] + delta_joint[0] * scale
             arm_desired = torch.clamp(arm_desired, arm_current[0] - 0.15, arm_current[0] + 0.15)
             limits = robot.data.soft_joint_pos_limits[0, arm_joint_ids]
             arm_desired = torch.clamp(arm_desired, limits[:, 0], limits[:, 1])
