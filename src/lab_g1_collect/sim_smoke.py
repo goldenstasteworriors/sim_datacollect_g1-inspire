@@ -57,6 +57,11 @@ def main() -> None:
             file=sys.stderr,
             flush=True,
         )
+        from pxr import Usd, UsdGeom
+        stage = omni.usd.get_context().get_stage()
+        bound = UsdGeom.BBoxCache(Usd.TimeCode.Default(), ["default", "render", "proxy"])
+        box = bound.ComputeWorldBound(stage.GetPrimAtPath("/World/envs/env_0/Object")).ComputeAlignedBox()
+        print("[sim-smoke] beaker bbox", box.GetMin(), box.GetMax(), file=sys.stderr, flush=True)
         from .sim_action import RIGHT_ARM_JOINTS, compact_to_isaac_action
         from .trajectory import generate_grasp_trajectory
 

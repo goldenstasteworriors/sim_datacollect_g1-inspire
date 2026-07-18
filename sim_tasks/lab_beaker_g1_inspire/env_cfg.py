@@ -41,6 +41,9 @@ class LabBeakerSceneCfg(ObjectTableSceneCfg):
             ),
             mass_props=sim_utils.MassPropertiesCfg(mass=0.12),
             collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=True),
+            visual_material=sim_utils.PreviewSurfaceCfg(
+                diffuse_color=(0.05, 0.35, 0.95), metallic=0.05, roughness=0.35,
+            ),
         ),
     )
 
