@@ -207,9 +207,19 @@ def main() -> None:
                 planning_failure = None
             start_pos = robot.data.body_pos_w[0, right_hand_index].clone()
             start_quat = robot.data.body_quat_w[0, right_hand_index].clone()
-            direction = start_pos - grasp_pos
-            direction = direction / torch.clamp(torch.linalg.vector_norm(direction), min=1e-6)
-            pregrasp_pos = grasp_pos + 0.10 * direction
+            # Retreat radially away from the object rather than towards the
+            # hand's initial position.  The latter can put the pre-grasp on the
+            # object side of a bad/noisy grasp and make the open hand collide
+            # with the object before executing the final approach.
+            retreat_direction = grasp_pos - object_center
+            retreat_norm = torch.linalg.vector_norm(retreat_direction)
+            if float(retreat_norm) < 1e-6:
+                # A grasp exactly at the object center has no radial direction;
+                # use the current hand side as a deterministic fallback.
+                retreat_direction = start_pos - object_center
+                retreat_norm = torch.linalg.vector_norm(retreat_direction)
+            retreat_direction = retreat_direction / torch.clamp(retreat_norm, min=1e-6)
+            pregrasp_pos = grasp_pos + 0.10 * retreat_direction
             lift_pos = grasp_pos + torch.tensor([0.0, 0.0, 0.12], device=env.device)
             reachable = hug_distance <= 0.35 if args.use_hug and args.auto_collect else True
             print(
@@ -217,6 +227,7 @@ def main() -> None:
                 f"episode={index:06d} xyz={grasp_pos.cpu().tolist()} "
                 f"quat_wxyz={grasp_quat.cpu().tolist()} "
                 f"object_distance_m={float(torch.linalg.vector_norm(grasp_pos - object_center)):.3f} "
+                f"pregrasp_object_distance_m={float(torch.linalg.vector_norm(pregrasp_pos - object_center)):.3f} "
                 f"reachable={reachable}",
                 file=sys.stderr, flush=True,
             )
