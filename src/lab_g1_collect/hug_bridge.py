@@ -10,7 +10,10 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw
 
-from .retarget import load_hug_prediction
+from .retarget import load_hug_geometry, load_hug_prediction
+
+
+HUG_MAX_DEPTH_MM = 3000
 
 
 def _save_hug_input_debug(
@@ -26,7 +29,8 @@ def _save_hug_input_debug(
         (x_offset, y_offset, x_offset + square, y_offset + square)
     ).resize((224, 224), Image.Resampling.LANCZOS)
 
-    valid_depth = depth_mm[(depth_mm > 0) & (depth_mm < 65535)]
+    valid_mask = (depth_mm > 0) & (depth_mm < HUG_MAX_DEPTH_MM)
+    valid_depth = depth_mm[valid_mask]
     if valid_depth.size:
         low, high = np.percentile(valid_depth, (2, 98))
         high = max(float(high), float(low) + 1.0)
@@ -38,6 +42,7 @@ def _save_hug_input_debug(
         [255 * normalized, 255 * (1.0 - np.abs(2.0 * normalized - 1.0)),
          255 * (1.0 - normalized)], axis=-1,
     ).astype(np.uint8)
+    depth_rgb[~valid_mask] = 0
     depth_224 = Image.fromarray(depth_rgb).crop(
         (x_offset, y_offset, x_offset + square, y_offset + square)
     ).resize((224, 224), Image.Resampling.NEAREST)
@@ -56,7 +61,7 @@ def _save_hug_input_debug(
     preview.paste(conditioned, (448, 28))
     labels = ImageDraw.Draw(preview)
     labels.text((6, 7), "HUG RGB 224x224", fill="black")
-    labels.text((230, 7), f"Depth {low:.0f}-{high:.0f} mm", fill="black")
+    labels.text((230, 7), f"Depth <3m ({low:.0f}-{high:.0f} mm)", fill="black")
     labels.text((454, 7), f"Beaker point ({u:.1f}, {v:.1f})", fill="black")
 
     Image.fromarray(rgb).save(run_dir / "rgb.png")
@@ -66,6 +71,7 @@ def _save_hug_input_debug(
         "rgb_shape": list(rgb.shape),
         "depth_shape": list(depth_mm.shape),
         "depth_unit": "millimeter",
+        "visualized_depth_range_mm": [1, HUG_MAX_DEPTH_MM],
         "K_original": np.asarray(K, dtype=float).tolist(),
         "center_crop": {"x_offset": x_offset, "y_offset": y_offset, "size": square},
         "hug_size": [224, 224],
@@ -75,6 +81,70 @@ def _save_hug_input_debug(
     }
     (run_dir / "input_metadata.json").write_text(
         json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+
+
+def _save_hug_output_debug(
+    run_dir: Path, rgb: np.ndarray, K: np.ndarray, wrist: np.ndarray,
+    landmarks: np.ndarray,
+) -> None:
+    """将 HUG 原始相机系 MANO 手骨架和腕部 XYZ 位姿投影到 224 RGB。"""
+    height, width = rgb.shape[:2]
+    square = min(height, width)
+    x_offset = (width - square) // 2
+    y_offset = (height - square) // 2
+    scale = 224.0 / square
+    K_224 = np.asarray(K, dtype=np.float64).copy()
+    K_224[0, 2] -= x_offset
+    K_224[1, 2] -= y_offset
+    K_224[:2, :] *= scale
+    canvas = Image.fromarray(rgb).crop(
+        (x_offset, y_offset, x_offset + square, y_offset + square)
+    ).resize((224, 224), Image.Resampling.LANCZOS)
+    draw = ImageDraw.Draw(canvas)
+
+    def project(points: np.ndarray) -> np.ndarray:
+        points = np.asarray(points, dtype=np.float64)
+        pixels_h = (K_224 @ points.T).T
+        pixels = pixels_h[:, :2] / pixels_h[:, 2:3]
+        pixels[points[:, 2] <= 0] = np.nan
+        return pixels
+
+    hand_uv = project(landmarks)
+    finger_chains = ((0, 1, 2, 3, 4), (0, 5, 6, 7, 8), (0, 9, 10, 11, 12),
+                     (0, 13, 14, 15, 16), (0, 17, 18, 19, 20))
+    for chain in finger_chains:
+        points = [tuple(hand_uv[index]) for index in chain if np.isfinite(hand_uv[index]).all()]
+        if len(points) >= 2:
+            draw.line(points, fill="white", width=2)
+    for u, v in hand_uv:
+        if np.isfinite((u, v)).all():
+            draw.ellipse((u - 2, v - 2, u + 2, v + 2), fill="white")
+
+    axis_length_m = 0.08
+    origin = wrist[:3, 3]
+    axis_points = np.vstack((origin, origin + wrist[:3, :3].T * axis_length_m))
+    axis_uv = project(axis_points)
+    axis_colors = ("red", "lime", "blue")
+    for endpoint, color in zip(axis_uv[1:], axis_colors):
+        if np.isfinite(axis_uv[0]).all() and np.isfinite(endpoint).all():
+            draw.line((tuple(axis_uv[0]), tuple(endpoint)), fill=color, width=4)
+    if np.isfinite(axis_uv[0]).all():
+        u, v = axis_uv[0]
+        draw.ellipse((u - 4, v - 4, u + 4, v + 4), outline="yellow", width=2)
+
+    labeled = Image.new("RGB", (224, 248), "white")
+    labeled.paste(canvas, (0, 24))
+    ImageDraw.Draw(labeled).text((5, 5), "HUG wrist: X red / Y green / Z blue", fill="black")
+    labeled.save(run_dir / "hug_output_wrist_pose.png")
+    output_metadata = {
+        "T_camera_wrist": np.asarray(wrist, dtype=float).tolist(),
+        "wrist_origin_uv_224": axis_uv[0].tolist(),
+        "axis_length_m": axis_length_m,
+        "landmarks_3d_camera": np.asarray(landmarks, dtype=float).tolist(),
+    }
+    (run_dir / "hug_output_metadata.json").write_text(
+        json.dumps(output_metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
 
 
@@ -119,4 +189,7 @@ def run_hug_capture(
         "--sampling-steps", str(sampling_steps),
     ]
     subprocess.run(command, cwd=project, env=env, check=True, timeout=180)
-    return load_hug_prediction(dataset / "grasp_pred" / "sim_capture.pkl")
+    prediction_path = dataset / "grasp_pred" / "sim_capture.pkl"
+    wrist, landmarks = load_hug_geometry(prediction_path)
+    _save_hug_output_debug(run_dir, rgb, K, wrist, landmarks)
+    return load_hug_prediction(prediction_path)

@@ -111,6 +111,12 @@ def mano_landmarks_to_inspire(landmarks_3d: np.ndarray) -> np.ndarray:
 
 def load_hug_prediction(path: str | Path) -> tuple[np.ndarray, np.ndarray]:
     """读取 HUG 保存的 grasp_pred pkl，返回腕部位姿和 Inspire 命令。"""
+    wrist, landmarks = load_hug_geometry(path)
+    return mano_wrist_to_inspire_pose(wrist, landmarks), mano_landmarks_to_inspire(landmarks)
+
+
+def load_hug_geometry(path: str | Path) -> tuple[np.ndarray, np.ndarray]:
+    """读取 HUG 原始相机系腕部位姿和 MANO 21 点，不进行机器人重定向。"""
     with Path(path).open("rb") as handle:
         data = _NumpyCompatibleUnpickler(handle).load()
     grasp = data["grasp"]
@@ -122,4 +128,4 @@ def load_hug_prediction(path: str | Path) -> tuple[np.ndarray, np.ndarray]:
         wrist = np.asarray(grasp.T_camera_wrist)
     if wrist.shape != (4, 4):
         raise ValueError(f"T_camera_wrist 应为 (4, 4)，实际为 {wrist.shape}")
-    return mano_wrist_to_inspire_pose(wrist, landmarks), mano_landmarks_to_inspire(landmarks)
+    return wrist, landmarks

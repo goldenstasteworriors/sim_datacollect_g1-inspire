@@ -72,7 +72,10 @@ python -m hug.inference \
 每次仿真调用 HUG 时，输入会保存到 `outputs/hug_runtime/episode_xxxxxx/`：
 `capture.npz` 是传给独立 HUG 进程的完整数据，`rgb.png` 和 `depth_mm.png` 是原始
 RGB/毫米深度，`input_metadata.json` 记录相机内参、中心裁剪和条件点，
-`hug_input_preview.png` 并排显示 HUG 的 224×224 RGB、深度与烧杯条件点。
+`hug_input_preview.png` 并排显示 HUG 的 224×224 RGB、3 m 内有效深度与烧杯条件点；
+超出 HUG 点云范围的深度显示为黑色。推理完成后，`hug_output_wrist_pose.png` 会把
+MANO 手骨架和相机系腕部 XYZ 三轴投影到输入图，原始矩阵保存在
+`hug_output_metadata.json`。
 
 HUG 保存的 `grasp_pred/*.pkl` 中包含 `landmarks_3d` 和 `T_camera_wrist`；
 `lab_g1_collect.retarget.load_hug_prediction` 会校验并映射到 RH56DFTP。
