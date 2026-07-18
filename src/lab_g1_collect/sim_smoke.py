@@ -336,9 +336,11 @@ def main() -> None:
           initial_hand_z = float(robot.data.body_pos_w[0, right_hand_index, 2])
           stability_samples = []
           episode_start_step = 0
+          motion_phase = 0
+          waypoint_wait_steps = 0
           arm_command = torch.tensor(arm_default, device=env.device)
           for step in range(args.steps):
-            phase = step - episode_start_step
+            phase = motion_phase
             target_pos_w, target_quat_w, hand_command = target_for_phase(plan, phase)
             root_pose = robot.data.root_pose_w
             target_pos_b, target_quat_b = subtract_frame_transforms(
@@ -428,7 +430,7 @@ def main() -> None:
                 front = env.scene["front_camera"].data.output
                 wrist = env.scene["right_wrist_camera"].data.output
                 writer.add_frame(
-                    timestamp=phase * 0.01,
+                    timestamp=(step - episode_start_step) * 0.01,
                     state=np.r_[arm_state, compact[7:]], action=compact,
                     images={"front": front["rgb"][0, ..., :3].cpu().numpy(),
                             "right_wrist": wrist["rgb"][0, ..., :3].cpu().numpy()},
@@ -493,6 +495,8 @@ def main() -> None:
                     arm_command = torch.tensor(arm_default, device=env.device)
                     stability_samples.clear()
                     episode_start_step = step + 1
+                    motion_phase = 0
+                    waypoint_wait_steps = 0
                     writer, current_episode_index = next_writer()
                     print(
                         f"[sim-collect] episode {current_episode_index:06d} planning with fresh RGB-D",
@@ -504,6 +508,34 @@ def main() -> None:
                         plan["pregrasp_pos"].unsqueeze(0), plan["grasp_quat"].unsqueeze(0)
                     )
                     print(f"[sim-collect] episode {current_episode_index:06d} running", file=sys.stderr, flush=True)
+                    continue
+            # Do not start the straight approach until the measured hand has
+            # actually reached pre-grasp. Likewise, do not close before the
+            # measured hand reaches grasp. A bounded wait still guarantees a
+            # terminal outcome for unreachable targets.
+            measured_error = float(torch.linalg.vector_norm(
+                target_pos_w - robot.data.body_pos_w[0, right_hand_index]
+            ))
+            gate = None
+            if phase == pregrasp_end - 1:
+                gate = ("pre-grasp", 0.02, 300)
+            elif phase == grasp_end - 1:
+                gate = ("grasp", 0.015, 200)
+            if gate is not None and measured_error > gate[1] and waypoint_wait_steps < gate[2]:
+                waypoint_wait_steps += 1
+                if waypoint_wait_steps == 1 or waypoint_wait_steps % 50 == 0:
+                    print(
+                        f"[IK gate] waiting_at={gate[0]} error_m={measured_error:.4f} "
+                        f"wait_steps={waypoint_wait_steps}", file=sys.stderr, flush=True,
+                    )
+            else:
+                if gate is not None and waypoint_wait_steps:
+                    print(
+                        f"[IK gate] leaving={gate[0]} error_m={measured_error:.4f} "
+                        f"wait_steps={waypoint_wait_steps}", file=sys.stderr, flush=True,
+                    )
+                waypoint_wait_steps = 0
+                motion_phase += 1
         report = {
             "task": task_id,
             "action_shape": list(env.action_space.shape),
