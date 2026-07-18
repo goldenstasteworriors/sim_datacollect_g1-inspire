@@ -69,6 +69,10 @@ python -m hug.inference \
 
 `hug_condition` 将交互式 App 的目标点击写成 HUG 批量推理所需的
 `condition_point` 和 PNG 掩码；坐标使用 HUG 的 224×224 模型输入尺度。
+每次仿真调用 HUG 时，输入会保存到 `outputs/hug_runtime/episode_xxxxxx/`：
+`capture.npz` 是传给独立 HUG 进程的完整数据，`rgb.png` 和 `depth_mm.png` 是原始
+RGB/毫米深度，`input_metadata.json` 记录相机内参、中心裁剪和条件点，
+`hug_input_preview.png` 并排显示 HUG 的 224×224 RGB、深度与烧杯条件点。
 
 HUG 保存的 `grasp_pred/*.pkl` 中包含 `landmarks_3d` 和 `T_camera_wrist`；
 `lab_g1_collect.retarget.load_hug_prediction` 会校验并映射到 RH56DFTP。
