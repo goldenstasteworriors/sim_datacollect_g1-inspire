@@ -39,9 +39,11 @@ class EpisodeWriter:
         if depth is not None:
             self.depths.append(np.asarray(depth, dtype=np.float32))
 
-    def finish(self) -> Path:
+    def finish(self, *, status: str = "success", metrics: dict | None = None) -> Path:
         if not self.rows:
             raise RuntimeError("不能提交空 episode")
+        if status not in {"success", "failed"}:
+            raise ValueError(f"不支持的 episode 状态: {status}")
         arrays = {"observation.state": np.stack(self.states), "action": np.stack(self.actions)}
         if self.depths:
             if len(self.depths) != len(self.rows):
@@ -51,10 +53,12 @@ class EpisodeWriter:
         (self.work / "frames.jsonl").write_text(
             "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in self.rows), encoding="utf-8"
         )
-        meta = {**self.metadata, "length": len(self.rows), "format": "lab-g1-v1"}
+        meta = {**self.metadata, "length": len(self.rows), "format": "lab-g1-v1",
+                "status": status, "metrics": metrics or {}}
         (self.work / "metadata.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
-        self.work.rename(self.final)
-        return self.final
+        destination = self.final if status == "success" else self.final.with_name(self.final.name + ".failed")
+        self.work.rename(destination)
+        return destination
 
 
 def validate_episode(path: str | Path) -> dict:
@@ -75,4 +79,3 @@ def validate_episode(path: str | Path) -> dict:
     if missing:
         raise FileNotFoundError(f"缺失图像: {missing[:3]}")
     return {"path": str(root), "frames": length, "state_dim": 13, "action_dim": 13}
-

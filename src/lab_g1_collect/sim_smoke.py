@@ -83,51 +83,87 @@ def main() -> None:
             np.array([0.85, 0.85, 0.8, 0.75, 0.7, 0.55], dtype=np.float32),
             fps=100, seconds=4.0,
         )
+        trajectory = np.concatenate([trajectory, np.repeat(trajectory[-1:], 50, axis=0)])
         expanded = compact_to_isaac_action(np.r_[arm_default, np.zeros(6, dtype=np.float32)], joint_names, default_pos)
         writer = None
         capture_stride = 3
-        if args.auto_collect:
-            from .dataset import EpisodeWriter
-            root = Path(args.output)
-            episode_index = 0
-            while ((root / f"episode_{episode_index:06d}").exists() or
-                   (root / f"episode_{episode_index:06d}.incomplete").exists()):
+        root = Path(args.output)
+        episode_index = 0
+        def next_writer():
+            nonlocal episode_index
+            while any((root / f"episode_{episode_index:06d}{suffix}").exists()
+                      for suffix in ("", ".incomplete", ".failed")):
                 episode_index += 1
-            writer = EpisodeWriter(root, episode_index, {
+            result = EpisodeWriter(root, episode_index, {
                 "instruction": "用右手抓起烧杯并抬升",
                 "robot_type": "unitree_g1_right_inspire_rh56dftp",
                 "source": "isaac_gui_scripted",
                 "fps": 30,
             })
+            episode_index += 1
+            return result
+        if args.auto_collect:
+            from .dataset import EpisodeWriter
+            writer = next_writer()
         import contextlib
         with open("/dev/null", "w") as sink:
           initial_beaker_z = float(env.scene["object"].data.root_pos_w[0, 2])
+          right_hand_index = env.scene["robot"].body_names.index("right_hand_base_link")
+          stability_samples = []
           for step in range(args.steps):
-            compact = trajectory[step % len(trajectory)]
+            phase = step % len(trajectory)
+            compact = trajectory[phase]
             expanded = compact_to_isaac_action(compact, joint_names, default_pos)
             action = torch.tensor(expanded, device=env.device).unsqueeze(0)
             with contextlib.redirect_stdout(sink):
                 observation, *_ = env.step(action)
-            if writer is not None and step < len(trajectory) and step % capture_stride == 0:
+            if writer is not None and phase % capture_stride == 0:
                 robot_pos = env.scene["robot"].data.joint_pos[0].cpu().numpy()
                 arm_state = np.array([robot_pos[joint_names.index(name)] for name in RIGHT_ARM_JOINTS])
                 front = env.scene["front_camera"].data.output
                 wrist = env.scene["right_wrist_camera"].data.output
                 writer.add_frame(
-                    timestamp=step * 0.01,
+                    timestamp=phase * 0.01,
                     state=np.r_[arm_state, compact[7:]], action=compact,
                     images={"front": front["rgb"][0, ..., :3].cpu().numpy(),
                             "right_wrist": wrist["rgb"][0, ..., :3].cpu().numpy()},
                     depth=front["distance_to_image_plane"][0].cpu().numpy(),
                 )
-            if writer is not None and step == len(trajectory) - 1:
-                lifted = float(env.scene["object"].data.root_pos_w[0, 2]) - initial_beaker_z
-                print(f"[sim-collect] beaker lift {lifted:.4f} m", file=sys.stderr, flush=True)
-                if lifted >= 0.03:
-                    print(f"[sim-collect] saved {writer.finish()}", file=sys.stderr, flush=True)
-                else:
-                    print("[sim-collect] rejected; episode remains incomplete", file=sys.stderr, flush=True)
+            if phase >= len(trajectory) - 30:
+                object_data = env.scene["object"].data
+                object_pos = object_data.root_pos_w[0]
+                hand_pos = env.scene["robot"].data.body_pos_w[0, right_hand_index]
+                stability_samples.append((
+                    float(object_pos[2]) - initial_beaker_z,
+                    float(torch.linalg.vector_norm(object_pos - hand_pos)),
+                    float(torch.linalg.vector_norm(object_data.root_vel_w[0, :3])),
+                    float(torch.linalg.vector_norm(object_data.root_vel_w[0, 3:])),
+                ))
+            if writer is not None and phase == len(trajectory) - 1:
+                samples = np.asarray(stability_samples, dtype=np.float64)
+                metrics = {
+                    "min_lift_m": float(samples[:, 0].min()),
+                    "max_hand_distance_m": float(samples[:, 1].max()),
+                    "max_linear_speed_mps": float(samples[:, 2].max()),
+                    "max_angular_speed_radps": float(samples[:, 3].max()),
+                }
+                checks = {
+                    "lift_ge_0.03m": metrics["min_lift_m"] >= 0.03,
+                    "hand_distance_le_0.12m": metrics["max_hand_distance_m"] <= 0.12,
+                    "linear_speed_le_0.15mps": metrics["max_linear_speed_mps"] <= 0.15,
+                    "angular_speed_le_1.0radps": metrics["max_angular_speed_radps"] <= 1.0,
+                }
+                metrics["checks"] = checks
+                status = "success" if all(checks.values()) else "failed"
+                saved = writer.finish(status=status, metrics=metrics)
+                print(f"[sim-collect] {status}: {saved} {metrics}", file=sys.stderr, flush=True)
                 writer = None
+                if step + 1 < args.steps:
+                    with contextlib.redirect_stdout(sink):
+                        observation, _ = env.reset()
+                    initial_beaker_z = float(env.scene["object"].data.root_pos_w[0, 2])
+                    stability_samples.clear()
+                    writer = next_writer()
         report = {
             "task": task_id,
             "action_shape": list(env.action_space.shape),
