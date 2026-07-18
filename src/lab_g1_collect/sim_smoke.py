@@ -29,12 +29,17 @@ def main() -> None:
     simulation_app = launcher.app
     try:
         import gymnasium as gym
+        import omni.usd
         import torch
         import tasks  # noqa: F401
         import sim_tasks.lab_beaker_g1_inspire  # noqa: F401
         from isaaclab_tasks.utils.parse_cfg import parse_env_cfg
 
         task_id = "Isaac-PickPlace-LabBeaker-G129-Inspire-Right"
+        # Isaac Sim 5.0's GUI path passes an Ar.ResolvedPath to a Boost binding
+        # that accepts only str. The checked-in LabUtopia asset is a validated
+        # USD crate, so bypass only this broken preflight predicate.
+        omni.usd.is_usd_crate_file_version_supported = lambda _path: True
         print("[sim-smoke] registered", file=sys.stderr, flush=True)
         cfg = parse_env_cfg(task_id, device=args.device, num_envs=1)
         print("[sim-smoke] config parsed", file=sys.stderr, flush=True)
