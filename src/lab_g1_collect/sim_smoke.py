@@ -518,16 +518,26 @@ def main() -> None:
             ))
             gate = None
             if phase == pregrasp_end - 1:
-                gate = ("pre-grasp", 0.02, 300)
+                gate = ("pre-grasp", 0.02, 100)
             elif phase == grasp_end - 1:
-                gate = ("grasp", 0.015, 200)
-            if gate is not None and measured_error > gate[1] and waypoint_wait_steps < gate[2]:
-                waypoint_wait_steps += 1
-                if waypoint_wait_steps == 1 or waypoint_wait_steps % 50 == 0:
-                    print(
-                        f"[IK gate] waiting_at={gate[0]} error_m={measured_error:.4f} "
-                        f"wait_steps={waypoint_wait_steps}", file=sys.stderr, flush=True,
+                gate = ("grasp", 0.015, 75)
+            if gate is not None and measured_error > gate[1]:
+                if waypoint_wait_steps < gate[2]:
+                    waypoint_wait_steps += 1
+                    if waypoint_wait_steps == 1 or waypoint_wait_steps % 50 == 0:
+                        print(
+                            f"[IK gate] waiting_at={gate[0]} error_m={measured_error:.4f} "
+                            f"wait_steps={waypoint_wait_steps}", file=sys.stderr, flush=True,
+                        )
+                else:
+                    failure = (
+                        f"IK {gate[0]} unreachable: error {measured_error:.4f} m "
+                        f"after {waypoint_wait_steps} wait steps"
                     )
+                    plan["planning_valid"] = False
+                    plan["planning_failure"] = failure
+                    motion_phase = cycle_steps - 1
+                    print(f"[sim-collect] {failure}", file=sys.stderr, flush=True)
             else:
                 if gate is not None and waypoint_wait_steps:
                     print(
