@@ -44,11 +44,19 @@ def main() -> None:
         omni.usd.is_usd_crate_file_version_supported = lambda _path: True
         print("[sim-smoke] registered", file=sys.stderr, flush=True)
         cfg = parse_env_cfg(task_id, device=args.device, num_envs=1)
+        cfg.viewer.eye = (2.2, 2.2, 1.8)
+        cfg.viewer.lookat = (-0.25, 0.45, 1.05)
         print("[sim-smoke] config parsed", file=sys.stderr, flush=True)
         env = gym.make(task_id, cfg=cfg).unwrapped
         print("[sim-smoke] environment created", file=sys.stderr, flush=True)
         observation, _ = env.reset()
         print("[sim-smoke] environment reset", file=sys.stderr, flush=True)
+        print(
+            "[sim-smoke] beaker xyz",
+            env.scene["object"].data.root_pos_w[0].cpu().tolist(),
+            file=sys.stderr,
+            flush=True,
+        )
         from .sim_action import RIGHT_ARM_JOINTS, compact_to_isaac_action
         from .trajectory import generate_grasp_trajectory
 
