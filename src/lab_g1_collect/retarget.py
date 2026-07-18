@@ -14,6 +14,33 @@ FINGER_CHAINS = {
     "pinky": (0, 17, 18, 19, 20),
 }
 
+# MANO wrist frame -> Inspire right-hand mounting frame.  Keep this calibration
+# explicit: HUG predicts a human wrist frame, while arm IK controls the robot's
+# right_hand_base_link.  Values are wxyz and metres and can be replaced after a
+# physical hand-eye calibration without changing the inference/control code.
+MANO_WRIST_TO_INSPIRE_TRANSLATION_M = np.array([0.0, 0.0, 0.025], dtype=np.float32)
+MANO_WRIST_TO_INSPIRE_QUAT_WXYZ = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+
+
+def _matrix_from_quat_wxyz(quat: np.ndarray) -> np.ndarray:
+    w, x, y, z = np.asarray(quat, dtype=np.float64)
+    return np.array([
+        [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+        [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+        [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
+    ], dtype=np.float32)
+
+
+def mano_wrist_to_inspire_pose(wrist: np.ndarray) -> np.ndarray:
+    """将 HUG/MANO 腕位姿变换为 Inspire 手掌安装基座位姿。"""
+    wrist = np.asarray(wrist, dtype=np.float32)
+    if wrist.shape != (4, 4) or not np.isfinite(wrist).all():
+        raise ValueError(f"T_camera_wrist 应为有限值 (4, 4)，实际为 {wrist.shape}")
+    wrist_to_inspire = np.eye(4, dtype=np.float32)
+    wrist_to_inspire[:3, :3] = _matrix_from_quat_wxyz(MANO_WRIST_TO_INSPIRE_QUAT_WXYZ)
+    wrist_to_inspire[:3, 3] = MANO_WRIST_TO_INSPIRE_TRANSLATION_M
+    return wrist @ wrist_to_inspire
+
 
 class _NumpyCompatibleUnpickler(pickle.Unpickler):
     """Load NumPy 2 pickles in Isaac environments that still pin NumPy 1.x."""
@@ -69,4 +96,4 @@ def load_hug_prediction(path: str | Path) -> tuple[np.ndarray, np.ndarray]:
         wrist = np.asarray(grasp.T_camera_wrist)
     if wrist.shape != (4, 4):
         raise ValueError(f"T_camera_wrist 应为 (4, 4)，实际为 {wrist.shape}")
-    return wrist.astype(np.float32), mano_landmarks_to_inspire(landmarks)
+    return mano_wrist_to_inspire_pose(wrist), mano_landmarks_to_inspire(landmarks)

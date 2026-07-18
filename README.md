@@ -72,6 +72,10 @@ python -m hug.inference \
 
 HUG 保存的 `grasp_pred/*.pkl` 中包含 `landmarks_3d` 和 `T_camera_wrist`；
 `lab_g1_collect.retarget.load_hug_prediction` 会校验并映射到 RH56DFTP。
+其中 `T_camera_wrist` 先经过显式的 MANO 腕到 Inspire 安装基座 SE(3) 外参，
+再从相机系变换到世界系。右臂差分 IK 使用完整的目标位置与四元数，而不是只做
+位置 IK。GUI 中 18 cm 坐标轴表示 HUG 抓取位姿，10 cm 坐标轴表示预抓取位姿；
+终端的 `[HUG target]` 同时输出世界坐标、`wxyz` 四元数、距烧杯距离和可达性判断。
 
 ## Isaac Sim 场景
 

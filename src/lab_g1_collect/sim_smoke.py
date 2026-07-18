@@ -70,6 +70,8 @@ def main() -> None:
                 xyz = robot.data.body_pos_w[0, body_index].cpu().tolist()
                 print(f"[sim-smoke] body {body_name} xyz {xyz}", file=sys.stderr, flush=True)
         from isaaclab.controllers import DifferentialIKController, DifferentialIKControllerCfg
+        from isaaclab.markers import VisualizationMarkers
+        from isaaclab.markers.config import FRAME_MARKER_CFG
         from isaaclab.utils.math import matrix_from_quat, quat_from_matrix, quat_inv, quat_slerp, subtract_frame_transforms
         from .sim_action import RIGHT_ARM_JOINTS, compact_to_isaac_action
 
@@ -83,8 +85,18 @@ def main() -> None:
         right_hand_index = env.scene["robot"].body_names.index("right_hand_base_link")
         jacobian_index = right_hand_index - 1 if robot.is_fixed_base else right_hand_index
         ik = DifferentialIKController(
-            DifferentialIKControllerCfg(command_type="position", use_relative_mode=False, ik_method="dls"),
+            DifferentialIKControllerCfg(command_type="pose", use_relative_mode=False, ik_method="dls"),
             num_envs=1, device=env.device,
+        )
+        hug_marker_cfg = FRAME_MARKER_CFG.copy()
+        hug_marker_cfg.markers.pop("connecting_line", None)
+        hug_marker_cfg.markers["frame"].scale = (0.18, 0.18, 0.18)
+        hug_marker = VisualizationMarkers(hug_marker_cfg.replace(prim_path="/Visuals/HUGGraspPose"))
+        pregrasp_marker_cfg = FRAME_MARKER_CFG.copy()
+        pregrasp_marker_cfg.markers.pop("connecting_line", None)
+        pregrasp_marker_cfg.markers["frame"].scale = (0.10, 0.10, 0.10)
+        pregrasp_marker = VisualizationMarkers(
+            pregrasp_marker_cfg.replace(prim_path="/Visuals/HUGPregraspPose")
         )
 
         def plan_episode(index: int):
@@ -128,6 +140,15 @@ def main() -> None:
             direction = direction / torch.clamp(torch.linalg.vector_norm(direction), min=1e-6)
             pregrasp_pos = grasp_pos + 0.10 * direction
             lift_pos = grasp_pos + torch.tensor([0.0, 0.0, 0.12], device=env.device)
+            reachable = hug_distance <= 0.25 if args.use_hug and args.auto_collect else True
+            print(
+                "[HUG target] "
+                f"episode={index:06d} xyz={grasp_pos.cpu().tolist()} "
+                f"quat_wxyz={grasp_quat.cpu().tolist()} "
+                f"object_distance_m={float(torch.linalg.vector_norm(grasp_pos - object_pos)):.3f} "
+                f"reachable={reachable}",
+                file=sys.stderr, flush=True,
+            )
             return {
                 "start_pos": start_pos, "start_quat": start_quat,
                 "pregrasp_pos": pregrasp_pos, "grasp_pos": grasp_pos,
@@ -183,6 +204,8 @@ def main() -> None:
         else:
             current_episode_index = 0
         plan = plan_episode(current_episode_index)
+        hug_marker.visualize(plan["grasp_pos"].unsqueeze(0), plan["grasp_quat"].unsqueeze(0))
+        pregrasp_marker.visualize(plan["pregrasp_pos"].unsqueeze(0), plan["grasp_quat"].unsqueeze(0))
         print(f"[sim-collect] episode {current_episode_index:06d} planned", file=sys.stderr, flush=True)
         ik.reset()
         import contextlib
@@ -201,7 +224,7 @@ def main() -> None:
             ee_pos_b, ee_quat_b = subtract_frame_transforms(
                 root_pose[:, :3], root_pose[:, 3:7], ee_pose_w[:, :3], ee_pose_w[:, 3:7],
             )
-            ik.set_command(target_pos_b, ee_quat=ee_quat_b)
+            ik.set_command(torch.cat((target_pos_b, target_quat_b), dim=-1))
             jacobian = robot.root_physx_view.get_jacobians()[:, jacobian_index, :, arm_joint_ids]
             world_to_base = matrix_from_quat(quat_inv(root_pose[:, 3:7]))
             jacobian[:, :3, :] = torch.bmm(world_to_base, jacobian[:, :3, :])
@@ -274,6 +297,10 @@ def main() -> None:
                         file=sys.stderr, flush=True,
                     )
                     plan = plan_episode(current_episode_index)
+                    hug_marker.visualize(plan["grasp_pos"].unsqueeze(0), plan["grasp_quat"].unsqueeze(0))
+                    pregrasp_marker.visualize(
+                        plan["pregrasp_pos"].unsqueeze(0), plan["grasp_quat"].unsqueeze(0)
+                    )
                     ik.reset()
                     print(f"[sim-collect] episode {current_episode_index:06d} running", file=sys.stderr, flush=True)
         report = {
