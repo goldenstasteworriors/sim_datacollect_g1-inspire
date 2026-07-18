@@ -9,11 +9,26 @@
 
 - `third_party/hug`：HUG 官方代码与模型接口。
 - `third_party/unitree_sim_isaaclab`：Unitree 官方 G1-29DoF + Inspire 仿真本体、相机和 DDS。
+- `third_party/xr_teleoperate`：Unitree 官方 Inspire URDF、DexPilot 配置和重定向实现。
 - `third_party/LabUtopia`：LabUtopia 官方代码。
 - `assets/labutopia/Beaker_01.usd`：LabUtopia-Dataset 的烧杯 OpenUSD 资产。
 
 这些仓库均以 Git submodule 固定到可复现提交。仿真统一采用 Isaac Sim 5.1，避免修改
 系统 CUDA 或显卡驱动。
+
+Inspire 手指重定向复用 Unitree 官方 `xr_teleoperate` 中固定版本的
+`dex-retargeting`、Inspire URDF 和 DexPilot 配置。按照上游方式安装到 IsaacLab
+环境；使用 `--no-deps` 保留 IsaacLab 已验证的 Torch/CUDA 组合：
+
+```bash
+git submodule update --init --recursive
+conda activate unitree_sim_env
+pip install --no-deps -e third_party/xr_teleoperate/teleop/robot_control/dex-retargeting
+```
+
+官方配置的主动关节顺序为拇指旋转、拇指弯曲、食指、中指、无名指、小指；采集层
+会重排成 Inspire API 的小指、无名指、中指、食指、拇指弯曲、拇指旋转。输出单位
+为 URDF 弧度并按官方限位裁剪，不再把 `0~1` 归一化量直接当作关节角。
 
 ## 环境
 

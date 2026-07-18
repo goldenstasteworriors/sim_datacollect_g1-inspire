@@ -9,3 +9,6 @@
 [submodule "third_party/hug"]
 	path = third_party/hug
 	url = https://github.com/KevinyWu/hug.git
+[submodule "third_party/xr_teleoperate"]
+	path = third_party/xr_teleoperate
+	url = git@github.com:unitreerobotics/xr_teleoperate.git

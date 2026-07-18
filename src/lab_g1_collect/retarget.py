@@ -1,18 +1,11 @@
 from __future__ import annotations
 
 import pickle
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
 
-
-FINGER_CHAINS = {
-    "thumb": (0, 1, 2, 3, 4),
-    "index": (0, 5, 6, 7, 8),
-    "middle": (0, 9, 10, 11, 12),
-    "ring": (0, 13, 14, 15, 16),
-    "pinky": (0, 17, 18, 19, 20),
-}
 
 # MANO wrist frame -> Inspire right-hand mounting frame.  Keep this calibration
 # explicit: HUG predicts a human wrist frame, while arm IK controls the robot's
@@ -21,6 +14,20 @@ FINGER_CHAINS = {
 MANO_WRIST_TO_INSPIRE_TRANSLATION_M = np.array([0.0, 0.0, 0.025], dtype=np.float32)
 MANO_WRIST_TO_INSPIRE_QUAT_WXYZ = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
 INSPIRE_TO_MANO_PALM_LENGTH_RATIO = 1.45
+
+# Official Unitree xr_teleoperate Inspire configuration. HUG/MANO uses 21
+# landmarks, while Unitree's XR stream uses 25 slots with fingertips at
+# 4/9/14/19/24. Only wrist and fingertips are consumed by DexPilot.
+MANO_TIPS = (4, 8, 12, 16, 20)
+XR_TIPS = (4, 9, 14, 19, 24)
+INSPIRE_API_JOINT_NAMES = (
+    "R_pinky_proximal_joint",
+    "R_ring_proximal_joint",
+    "R_middle_proximal_joint",
+    "R_index_proximal_joint",
+    "R_thumb_proximal_pitch_joint",
+    "R_thumb_proximal_yaw_joint",
+)
 
 
 def _matrix_from_quat_wxyz(quat: np.ndarray) -> np.ndarray:
@@ -77,36 +84,49 @@ class _NumpyCompatibleUnpickler(pickle.Unpickler):
         return super().find_class(module, name)
 
 
-def _chain_flexion(points: np.ndarray, chain: tuple[int, ...]) -> float:
-    segments = np.diff(points[list(chain)], axis=0)
-    norms = np.linalg.norm(segments, axis=1, keepdims=True)
-    segments = segments / np.maximum(norms, 1e-8)
-    dots = np.sum(segments[:-1] * segments[1:], axis=1)
-    bends = np.arccos(np.clip(dots, -1.0, 1.0))
-    return float(np.clip(bends.sum() / (0.85 * np.pi), 0.0, 1.0))
+@lru_cache(maxsize=1)
+def _official_inspire_retargeter():
+    """Build Unitree's pinned DexPilot solver and hardware-order index map."""
+    import yaml
+    from dex_retargeting import RetargetingConfig
+
+    project = Path(__file__).resolve().parents[2]
+    assets = project / "third_party/xr_teleoperate/assets"
+    config_path = assets / "inspire_hand/inspire_hand.yml"
+    if not config_path.is_file():
+        raise FileNotFoundError(f"缺少 Unitree Inspire 重定向配置: {config_path}")
+    RetargetingConfig.set_default_urdf_dir(assets)
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))["right"]
+    retargeter = RetargetingConfig.from_dict(config).build()
+    output_indices = np.array(
+        [retargeter.joint_names.index(name) for name in INSPIRE_API_JOINT_NAMES], dtype=np.int64
+    )
+    return retargeter, output_indices
 
 
 def mano_landmarks_to_inspire(landmarks_3d: np.ndarray) -> np.ndarray:
-    """将 HUG/MANO 21 点右手映射为 RH56DFTP 的 6 路归一化命令。
+    """用 Unitree 官方 DexPilot 将 MANO 21 点映射为 Inspire 6 路弧度命令。
 
-    输出顺序与 Unitree 官方 DFX 服务一致：小指、无名指、中指、食指、
-    拇指弯曲、拇指旋转。0 为张开，1 为闭合。
+    输出顺序与 Unitree 官方 DFX/FTP 接口一致：小指、无名指、中指、食指、
+    拇指弯曲、拇指旋转。输出已经是 URDF 关节弧度，不是 0~1 归一化值。
     """
-    points = np.asarray(landmarks_3d, dtype=np.float64)
+    points = np.asarray(landmarks_3d, dtype=np.float32)
     if points.shape != (21, 3) or not np.isfinite(points).all():
         raise ValueError(f"landmarks_3d 应为有限值 (21, 3)，实际为 {points.shape}")
-    flex = {name: _chain_flexion(points, chain) for name, chain in FINGER_CHAINS.items()}
-
-    palm_axis = points[5] - points[17]
-    thumb_axis = points[4] - points[2]
-    palm_axis /= max(np.linalg.norm(palm_axis), 1e-8)
-    thumb_axis /= max(np.linalg.norm(thumb_axis), 1e-8)
-    # 对掌程度越高，拇指与掌横轴越接近反向。
-    thumb_rotation = float(np.clip((1.0 - np.dot(palm_axis, thumb_axis)) * 0.5, 0.0, 1.0))
-    return np.array(
-        [flex["pinky"], flex["ring"], flex["middle"], flex["index"], flex["thumb"], thumb_rotation],
-        dtype=np.float32,
-    )
+    xr_points = np.repeat(points[0:1], 25, axis=0)
+    xr_points[0] = points[0]
+    xr_points[list(XR_TIPS)] = points[list(MANO_TIPS)]
+    retargeter, output_indices = _official_inspire_retargeter()
+    human_indices = retargeter.optimizer.target_link_human_indices
+    reference_vectors = xr_points[human_indices[1]] - xr_points[human_indices[0]]
+    # Each HUG grasp is independent; do not leak the low-pass/filter state from
+    # a previous episode into the next episode's grasp solution.
+    retargeter.reset()
+    robot_qpos = retargeter.retarget(reference_vectors)
+    command = np.asarray(robot_qpos[output_indices], dtype=np.float32)
+    lower = np.array([0.0, 0.0, 0.0, 0.0, 0.0, -0.1], dtype=np.float32)
+    upper = np.array([1.7, 1.7, 1.7, 1.7, 0.5, 1.3], dtype=np.float32)
+    return np.clip(command, lower, upper)
 
 
 def load_hug_prediction(path: str | Path) -> tuple[np.ndarray, np.ndarray]:
