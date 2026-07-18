@@ -15,6 +15,15 @@ FINGER_CHAINS = {
 }
 
 
+class _NumpyCompatibleUnpickler(pickle.Unpickler):
+    """Load NumPy 2 pickles in Isaac environments that still pin NumPy 1.x."""
+
+    def find_class(self, module: str, name: str):
+        if module.startswith("numpy._core"):
+            module = module.replace("numpy._core", "numpy.core", 1)
+        return super().find_class(module, name)
+
+
 def _chain_flexion(points: np.ndarray, chain: tuple[int, ...]) -> float:
     segments = np.diff(points[list(chain)], axis=0)
     norms = np.linalg.norm(segments, axis=1, keepdims=True)
@@ -50,7 +59,7 @@ def mano_landmarks_to_inspire(landmarks_3d: np.ndarray) -> np.ndarray:
 def load_hug_prediction(path: str | Path) -> tuple[np.ndarray, np.ndarray]:
     """读取 HUG 保存的 grasp_pred pkl，返回腕部位姿和 Inspire 命令。"""
     with Path(path).open("rb") as handle:
-        data = pickle.load(handle)
+        data = _NumpyCompatibleUnpickler(handle).load()
     grasp = data["grasp"]
     if isinstance(grasp, dict):
         landmarks = np.asarray(grasp["landmarks_3d"])
