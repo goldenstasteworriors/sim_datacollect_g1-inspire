@@ -86,6 +86,11 @@ def run_hug_capture(
     dataset = run_dir / "dataset"
     dataset.mkdir(parents=True, exist_ok=True)
     capture = run_dir / "capture.npz"
+    depth_m = np.asarray(depth_m)
+    if depth_m.ndim == 3 and depth_m.shape[-1] == 1:
+        depth_m = depth_m[..., 0]
+    if depth_m.ndim != 2:
+        raise ValueError(f"HUG depth 应为 HxW 或 HxWx1，实际为 {depth_m.shape}")
     depth_mm = np.clip(np.nan_to_num(depth_m) * 1000.0, 0, 65534).astype(np.uint16)
     rgb = np.asarray(rgb, dtype=np.uint8)
     K = np.asarray(K, dtype=np.float64)
