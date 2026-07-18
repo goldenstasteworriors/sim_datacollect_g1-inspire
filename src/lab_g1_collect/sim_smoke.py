@@ -83,7 +83,7 @@ def main() -> None:
         right_hand_index = env.scene["robot"].body_names.index("right_hand_base_link")
         jacobian_index = right_hand_index - 1 if robot.is_fixed_base else right_hand_index
         ik = DifferentialIKController(
-            DifferentialIKControllerCfg(command_type="pose", use_relative_mode=False, ik_method="dls"),
+            DifferentialIKControllerCfg(command_type="position", use_relative_mode=False, ik_method="dls"),
             num_envs=1, device=env.device,
         )
 
@@ -196,7 +196,7 @@ def main() -> None:
                 root_pose[:, :3], root_pose[:, 3:7],
                 target_pos_w.unsqueeze(0), target_quat_w.unsqueeze(0),
             )
-            ik.set_command(torch.cat([target_pos_b, target_quat_b], dim=-1))
+            ik.set_command(target_pos_b)
             ee_pose_w = robot.data.body_pose_w[:, right_hand_index]
             ee_pos_b, ee_quat_b = subtract_frame_transforms(
                 root_pose[:, :3], root_pose[:, 3:7], ee_pose_w[:, :3], ee_pose_w[:, 3:7],
