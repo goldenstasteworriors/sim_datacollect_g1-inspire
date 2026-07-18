@@ -46,12 +46,16 @@ def main() -> None:
     parser.add_argument("--hand-closure-scale", type=float, default=1.0)
     parser.add_argument("--debug-ik", action="store_true")
     parser.add_argument(
-        "--ik-command-integration", type=float, default=0.0,
+        "--ik-command-integration", type=float, default=0.95,
         help="将当前 DLS 修正累积到上次位置命令的比例（0 表示不累积）",
     )
     parser.add_argument(
-        "--ik-max-joint-step", type=float, default=0.08,
+        "--ik-max-joint-step", type=float, default=0.02,
         help="每个控制步允许 DLS 位置目标领先当前关节的最大弧度",
+    )
+    parser.add_argument(
+        "--ik-max-command-lead", type=float, default=0.05,
+        help="位置命令相对实测关节的最大领先弧度，用于抑制累积超调",
     )
     parser.add_argument("--output", default="outputs/gui_collect")
     args = parser.parse_args()
@@ -382,7 +386,10 @@ def main() -> None:
                 arm_current[0] + delta_joint[0] * scale
                 + integration * (arm_command - arm_current[0])
             )
-            arm_desired = torch.clamp(arm_desired, arm_current[0] - 0.15, arm_current[0] + 0.15)
+            command_lead = float(np.clip(args.ik_max_command_lead, 0.01, 0.15))
+            arm_desired = torch.clamp(
+                arm_desired, arm_current[0] - command_lead, arm_current[0] + command_lead
+            )
             limits = robot.data.soft_joint_pos_limits[0, arm_joint_ids]
             arm_desired = torch.clamp(arm_desired, limits[:, 0], limits[:, 1])
             arm_command = arm_desired.detach()
