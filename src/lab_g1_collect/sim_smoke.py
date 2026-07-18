@@ -196,11 +196,11 @@ def main() -> None:
                 root_pose[:, :3], root_pose[:, 3:7],
                 target_pos_w.unsqueeze(0), target_quat_w.unsqueeze(0),
             )
-            ik.set_command(target_pos_b)
             ee_pose_w = robot.data.body_pose_w[:, right_hand_index]
             ee_pos_b, ee_quat_b = subtract_frame_transforms(
                 root_pose[:, :3], root_pose[:, 3:7], ee_pose_w[:, :3], ee_pose_w[:, 3:7],
             )
+            ik.set_command(target_pos_b, ee_quat=ee_quat_b)
             jacobian = robot.root_physx_view.get_jacobians()[:, jacobian_index, :, arm_joint_ids]
             arm_current = robot.data.joint_pos[:, arm_joint_ids]
             arm_desired = ik.compute(ee_pos_b, ee_quat_b, jacobian, arm_current)[0]
