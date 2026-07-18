@@ -13,6 +13,7 @@ def main() -> None:
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--headless", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--auto-collect", action="store_true")
+    parser.add_argument("--use-hug", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--output", default="outputs/gui_collect")
     args = parser.parse_args()
 
@@ -68,22 +69,95 @@ def main() -> None:
             if "hand" in lowered or "wrist" in lowered:
                 xyz = robot.data.body_pos_w[0, body_index].cpu().tolist()
                 print(f"[sim-smoke] body {body_name} xyz {xyz}", file=sys.stderr, flush=True)
+        from isaaclab.controllers import DifferentialIKController, DifferentialIKControllerCfg
+        from isaaclab.utils.math import matrix_from_quat, quat_from_matrix, quat_slerp, subtract_frame_transforms
         from .sim_action import RIGHT_ARM_JOINTS, compact_to_isaac_action
-        from .trajectory import generate_grasp_trajectory
 
         joint_names = list(env.scene["robot"].joint_names)
         default_pos = env.scene["robot"].data.default_joint_pos[0].cpu().numpy()
         import numpy as np
 
         arm_default = np.array([default_pos[joint_names.index(name)] for name in RIGHT_ARM_JOINTS], dtype=np.float32)
-        grasp_arm = arm_default.copy()
-        lift_arm = grasp_arm + np.array([0.22, 0, 0, 0, 0, 0, 0], dtype=np.float32)
-        trajectory = generate_grasp_trajectory(
-            arm_default, grasp_arm, lift_arm,
-            np.array([0.85, 0.85, 0.8, 0.75, 0.7, 0.55], dtype=np.float32),
-            fps=100, seconds=4.0,
+        cycle_steps = 450
+        arm_joint_ids = [joint_names.index(name) for name in RIGHT_ARM_JOINTS]
+        right_hand_index = env.scene["robot"].body_names.index("right_hand_base_link")
+        jacobian_index = right_hand_index - 1 if robot.is_fixed_base else right_hand_index
+        ik = DifferentialIKController(
+            DifferentialIKControllerCfg(command_type="pose", use_relative_mode=False, ik_method="dls"),
+            num_envs=1, device=env.device,
         )
-        trajectory = np.concatenate([trajectory, np.repeat(trajectory[-1:], 50, axis=0)])
+
+        def plan_episode(index: int):
+            front = env.scene["front_camera"].data
+            object_pos = env.scene["object"].data.root_pos_w[0]
+            camera_pos = front.pos_w[0]
+            camera_rot = matrix_from_quat(front.quat_w_ros[0])
+            point_camera = camera_rot.T @ (object_pos - camera_pos)
+            K_tensor = front.intrinsic_matrices[0]
+            projected = K_tensor @ point_camera
+            u = float(projected[0] / projected[2])
+            v = float(projected[1] / projected[2])
+            height, width = front.output["rgb"].shape[1:3]
+            square = min(height, width)
+            u_224 = (u - (width - square) / 2.0) * 224.0 / square
+            v_224 = (v - (height - square) / 2.0) * 224.0 / square
+            if not (0 <= u_224 < 224 and 0 <= v_224 < 224):
+                raise RuntimeError(f"烧杯条件点不在 HUG 图像内: {(u_224, v_224)}")
+            if args.use_hug and args.auto_collect:
+                from .hug_bridge import run_hug_capture
+                wrist_camera, hand_target = run_hug_capture(
+                    project=project, episode_index=index,
+                    rgb=front.output["rgb"][0, ..., :3].cpu().numpy(),
+                    depth_m=front.output["distance_to_image_plane"][0].cpu().numpy(),
+                    K=K_tensor.cpu().numpy(), point_uv_224=(u_224, v_224),
+                )
+                wrist_camera_t = torch.tensor(wrist_camera, device=env.device)
+                grasp_pos = camera_pos + camera_rot @ wrist_camera_t[:3, 3]
+                grasp_rot = camera_rot @ wrist_camera_t[:3, :3]
+                grasp_quat = quat_from_matrix(grasp_rot.unsqueeze(0))[0]
+                hug_distance = float(torch.linalg.vector_norm(grasp_pos - object_pos))
+                if hug_distance > 0.25:
+                    raise RuntimeError(f"HUG 腕部预测距烧杯过远: {hug_distance:.3f} m")
+            else:
+                hand_target = np.array([0.85, 0.85, 0.8, 0.75, 0.7, 0.55], dtype=np.float32)
+                grasp_pos = object_pos + torch.tensor([0.0, -0.075, 0.035], device=env.device)
+                grasp_quat = robot.data.body_quat_w[0, right_hand_index].clone()
+            start_pos = robot.data.body_pos_w[0, right_hand_index].clone()
+            start_quat = robot.data.body_quat_w[0, right_hand_index].clone()
+            direction = start_pos - grasp_pos
+            direction = direction / torch.clamp(torch.linalg.vector_norm(direction), min=1e-6)
+            pregrasp_pos = grasp_pos + 0.10 * direction
+            lift_pos = grasp_pos + torch.tensor([0.0, 0.0, 0.12], device=env.device)
+            return {
+                "start_pos": start_pos, "start_quat": start_quat,
+                "pregrasp_pos": pregrasp_pos, "grasp_pos": grasp_pos,
+                "lift_pos": lift_pos, "grasp_quat": grasp_quat,
+                "hand_target": np.asarray(hand_target, dtype=np.float32),
+                "uv_224": (u_224, v_224),
+            }
+
+        def target_for_phase(plan: dict, phase: int):
+            if phase < 100:
+                alpha = phase / 99.0
+                pos = torch.lerp(plan["start_pos"], plan["pregrasp_pos"], alpha)
+                quat = quat_slerp(plan["start_quat"], plan["grasp_quat"], alpha)
+                hand = np.zeros(6, dtype=np.float32)
+            elif phase < 180:
+                alpha = (phase - 100) / 79.0
+                pos = torch.lerp(plan["pregrasp_pos"], plan["grasp_pos"], alpha)
+                quat = plan["grasp_quat"]
+                hand = np.zeros(6, dtype=np.float32)
+            elif phase < 280:
+                alpha = (phase - 180) / 99.0
+                pos, quat = plan["grasp_pos"], plan["grasp_quat"]
+                hand = plan["hand_target"] * (alpha * alpha * (3.0 - 2.0 * alpha))
+            elif phase < 400:
+                alpha = (phase - 280) / 119.0
+                pos = torch.lerp(plan["grasp_pos"], plan["lift_pos"], alpha)
+                quat, hand = plan["grasp_quat"], plan["hand_target"]
+            else:
+                pos, quat, hand = plan["lift_pos"], plan["grasp_quat"], plan["hand_target"]
+            return pos, quat, hand
         expanded = compact_to_isaac_action(np.r_[arm_default, np.zeros(6, dtype=np.float32)], joint_names, default_pos)
         writer = None
         capture_stride = 3
@@ -94,25 +168,45 @@ def main() -> None:
             while any((root / f"episode_{episode_index:06d}{suffix}").exists()
                       for suffix in ("", ".incomplete", ".failed")):
                 episode_index += 1
-            result = EpisodeWriter(root, episode_index, {
+            current_index = episode_index
+            result = EpisodeWriter(root, current_index, {
                 "instruction": "用右手抓起烧杯并抬升",
                 "robot_type": "unitree_g1_right_inspire_rh56dftp",
-                "source": "isaac_gui_scripted",
+                "source": "isaac_rgbd_hug_mano_diff_ik" if args.use_hug else "isaac_object_pose_diff_ik",
                 "fps": 30,
             })
             episode_index += 1
-            return result
+            return result, current_index
         if args.auto_collect:
             from .dataset import EpisodeWriter
-            writer = next_writer()
+            writer, current_episode_index = next_writer()
+        else:
+            current_episode_index = 0
+        plan = plan_episode(current_episode_index)
+        ik.reset()
         import contextlib
         with open("/dev/null", "w") as sink:
           initial_beaker_z = float(env.scene["object"].data.root_pos_w[0, 2])
-          right_hand_index = env.scene["robot"].body_names.index("right_hand_base_link")
           stability_samples = []
           for step in range(args.steps):
-            phase = step % len(trajectory)
-            compact = trajectory[phase]
+            phase = step % cycle_steps
+            target_pos_w, target_quat_w, hand_command = target_for_phase(plan, phase)
+            root_pose = robot.data.root_pose_w
+            target_pos_b, target_quat_b = subtract_frame_transforms(
+                root_pose[:, :3], root_pose[:, 3:7],
+                target_pos_w.unsqueeze(0), target_quat_w.unsqueeze(0),
+            )
+            ik.set_command(torch.cat([target_pos_b, target_quat_b], dim=-1))
+            ee_pose_w = robot.data.body_pose_w[:, right_hand_index]
+            ee_pos_b, ee_quat_b = subtract_frame_transforms(
+                root_pose[:, :3], root_pose[:, 3:7], ee_pose_w[:, :3], ee_pose_w[:, 3:7],
+            )
+            jacobian = robot.root_physx_view.get_jacobians()[:, jacobian_index, :, arm_joint_ids]
+            arm_current = robot.data.joint_pos[:, arm_joint_ids]
+            arm_desired = ik.compute(ee_pos_b, ee_quat_b, jacobian, arm_current)[0]
+            limits = robot.data.soft_joint_pos_limits[0, arm_joint_ids]
+            arm_desired = torch.clamp(arm_desired, limits[:, 0], limits[:, 1])
+            compact = np.r_[arm_desired.cpu().numpy(), hand_command].astype(np.float32)
             expanded = compact_to_isaac_action(compact, joint_names, default_pos)
             action = torch.tensor(expanded, device=env.device).unsqueeze(0)
             with contextlib.redirect_stdout(sink):
@@ -129,7 +223,7 @@ def main() -> None:
                             "right_wrist": wrist["rgb"][0, ..., :3].cpu().numpy()},
                     depth=front["distance_to_image_plane"][0].cpu().numpy(),
                 )
-            if phase >= len(trajectory) - 30:
+            if phase >= cycle_steps - 30:
                 object_data = env.scene["object"].data
                 object_pos = object_data.root_pos_w[0]
                 hand_pos = env.scene["robot"].data.body_pos_w[0, right_hand_index]
@@ -139,7 +233,7 @@ def main() -> None:
                     float(torch.linalg.vector_norm(object_data.root_vel_w[0, :3])),
                     float(torch.linalg.vector_norm(object_data.root_vel_w[0, 3:])),
                 ))
-            if writer is not None and phase == len(trajectory) - 1:
+            if writer is not None and phase == cycle_steps - 1:
                 samples = np.asarray(stability_samples, dtype=np.float64)
                 metrics = {
                     "min_lift_m": float(samples[:, 0].min()),
@@ -163,7 +257,9 @@ def main() -> None:
                         observation, _ = env.reset()
                     initial_beaker_z = float(env.scene["object"].data.root_pos_w[0, 2])
                     stability_samples.clear()
-                    writer = next_writer()
+                    writer, current_episode_index = next_writer()
+                    plan = plan_episode(current_episode_index)
+                    ik.reset()
         report = {
             "task": task_id,
             "action_shape": list(env.action_space.shape),
