@@ -20,6 +20,7 @@ FINGER_CHAINS = {
 # physical hand-eye calibration without changing the inference/control code.
 MANO_WRIST_TO_INSPIRE_TRANSLATION_M = np.array([0.0, 0.0, 0.025], dtype=np.float32)
 MANO_WRIST_TO_INSPIRE_QUAT_WXYZ = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+INSPIRE_TO_MANO_PALM_LENGTH_RATIO = 1.45
 
 
 def _matrix_from_quat_wxyz(quat: np.ndarray) -> np.ndarray:
@@ -31,11 +32,36 @@ def _matrix_from_quat_wxyz(quat: np.ndarray) -> np.ndarray:
     ], dtype=np.float32)
 
 
-def mano_wrist_to_inspire_pose(wrist: np.ndarray) -> np.ndarray:
-    """将 HUG/MANO 腕位姿变换为 Inspire 手掌安装基座位姿。"""
+def mano_wrist_to_inspire_pose(wrist: np.ndarray, landmarks_3d: np.ndarray | None = None) -> np.ndarray:
+    """将 HUG/MANO 腕位姿变换为 Inspire 手掌安装基座位姿。
+
+    有21点骨架时，直接用掌面几何重建朝向，避免把 MANO 内部坐标轴误当作
+    Inspire 安装轴。Inspire 四指沿本体 -Y 伸展，食指到小指方向对应 -Z。
+    """
     wrist = np.asarray(wrist, dtype=np.float32)
     if wrist.shape != (4, 4) or not np.isfinite(wrist).all():
         raise ValueError(f"T_camera_wrist 应为有限值 (4, 4)，实际为 {wrist.shape}")
+    if landmarks_3d is not None:
+        points = np.asarray(landmarks_3d, dtype=np.float32)
+        if points.shape != (21, 3) or not np.isfinite(points).all():
+            raise ValueError(f"landmarks_3d 应为有限值 (21, 3)，实际为 {points.shape}")
+        origin = points[0]
+        mcp_center = points[[5, 9, 13, 17]].mean(axis=0)
+        finger_forward = mcp_center - origin
+        finger_forward /= max(np.linalg.norm(finger_forward), 1e-8)
+        index_to_pinky = points[17] - points[5]
+        index_to_pinky -= finger_forward * np.dot(index_to_pinky, finger_forward)
+        index_to_pinky /= max(np.linalg.norm(index_to_pinky), 1e-8)
+        x_axis = np.cross(index_to_pinky, finger_forward)
+        x_axis /= max(np.linalg.norm(x_axis), 1e-8)
+        y_axis = -finger_forward
+        z_axis = index_to_pinky
+        result = np.eye(4, dtype=np.float32)
+        result[:3, :3] = np.column_stack((x_axis, y_axis, z_axis))
+        mano_palm_vector = mcp_center - origin
+        result[:3, 3] = mcp_center - INSPIRE_TO_MANO_PALM_LENGTH_RATIO * mano_palm_vector
+        return result
+
     wrist_to_inspire = np.eye(4, dtype=np.float32)
     wrist_to_inspire[:3, :3] = _matrix_from_quat_wxyz(MANO_WRIST_TO_INSPIRE_QUAT_WXYZ)
     wrist_to_inspire[:3, 3] = MANO_WRIST_TO_INSPIRE_TRANSLATION_M
@@ -96,4 +122,4 @@ def load_hug_prediction(path: str | Path) -> tuple[np.ndarray, np.ndarray]:
         wrist = np.asarray(grasp.T_camera_wrist)
     if wrist.shape != (4, 4):
         raise ValueError(f"T_camera_wrist 应为 (4, 4)，实际为 {wrist.shape}")
-    return mano_wrist_to_inspire_pose(wrist), mano_landmarks_to_inspire(landmarks)
+    return mano_wrist_to_inspire_pose(wrist, landmarks), mano_landmarks_to_inspire(landmarks)

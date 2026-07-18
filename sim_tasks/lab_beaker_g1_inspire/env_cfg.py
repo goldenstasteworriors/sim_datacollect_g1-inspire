@@ -41,24 +41,111 @@ class LabBeakerSceneCfg(ObjectTableSceneCfg):
     front_camera = CameraPresets.g1_front_camera()
     front_camera.data_types = ["rgb", "distance_to_image_plane"]
 
-    object = RigidObjectCfg(
-        prim_path="/World/envs/env_.*/Object",
-        init_state=RigidObjectCfg.InitialStateCfg(pos=(-0.06, 0.36, 0.82), rot=(1.0, 0.0, 0.0, 0.0)),
-        spawn=sim_utils.UsdFileCfg(
-            usd_path=_beaker_path(),
-            scale=(0.01, 0.01, 0.01),
-            rigid_props=sim_utils.RigidBodyPropertiesCfg(
-                max_linear_velocity=2.0,
-                max_angular_velocity=4.0,
-                max_depenetration_velocity=1.0,
+    if os.environ.get("LAB_OBJECT_SHAPE", "beaker") == "box":
+        object = RigidObjectCfg(
+            prim_path="/World/envs/env_.*/Object",
+            init_state=RigidObjectCfg.InitialStateCfg(
+                pos=(-0.06, 0.36, 0.82), rot=(1.0, 0.0, 0.0, 0.0)
             ),
-            mass_props=sim_utils.MassPropertiesCfg(mass=0.12),
-            collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=True),
-            visual_material=sim_utils.PreviewSurfaceCfg(
-                diffuse_color=(0.05, 0.35, 0.95), metallic=0.05, roughness=0.35,
+            spawn=sim_utils.CuboidCfg(
+                size=(0.035, 0.035, 0.05),
+                rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                    max_linear_velocity=2.0,
+                    max_angular_velocity=4.0,
+                    max_depenetration_velocity=1.0,
+                    linear_damping=2.0,
+                    angular_damping=5.0,
+                ),
+                mass_props=sim_utils.MassPropertiesCfg(mass=0.04),
+                collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=True),
+                visual_material=sim_utils.PreviewSurfaceCfg(
+                    diffuse_color=(0.85, 0.75, 0.10), roughness=0.7
+                ),
+                physics_material=sim_utils.RigidBodyMaterialCfg(
+                    friction_combine_mode="max",
+                    restitution_combine_mode="min",
+                    static_friction=1.8,
+                    dynamic_friction=1.5,
+                    restitution=0.0,
+                ),
             ),
-        ),
-    )
+        )
+    elif os.environ.get("LAB_OBJECT_SHAPE", "beaker") == "sphere":
+        object = RigidObjectCfg(
+            prim_path="/World/envs/env_.*/Object",
+            init_state=RigidObjectCfg.InitialStateCfg(
+                pos=(-0.06, 0.36, 0.845), rot=(1.0, 0.0, 0.0, 0.0)
+            ),
+            spawn=sim_utils.SphereCfg(
+                radius=0.025,
+                rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                    max_linear_velocity=2.0,
+                    max_angular_velocity=4.0,
+                    max_depenetration_velocity=1.0,
+                ),
+                mass_props=sim_utils.MassPropertiesCfg(mass=0.04),
+                collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=True),
+                visual_material=sim_utils.PreviewSurfaceCfg(
+                    diffuse_color=(0.15, 0.85, 0.25), roughness=0.5
+                ),
+                physics_material=sim_utils.RigidBodyMaterialCfg(
+                    friction_combine_mode="max",
+                    restitution_combine_mode="min",
+                    static_friction=1.5,
+                    dynamic_friction=1.2,
+                    restitution=0.0,
+                ),
+            ),
+        )
+    elif os.environ.get("LAB_OBJECT_SHAPE", "beaker") == "cylinder":
+        object = RigidObjectCfg(
+            prim_path="/World/envs/env_.*/Object",
+            init_state=RigidObjectCfg.InitialStateCfg(
+                pos=(-0.06, 0.36, 0.86), rot=(1.0, 0.0, 0.0, 0.0)
+            ),
+            spawn=sim_utils.CylinderCfg(
+                radius=0.02,
+                height=0.08,
+                rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                    max_linear_velocity=2.0,
+                    max_angular_velocity=4.0,
+                    max_depenetration_velocity=1.0,
+                ),
+                mass_props=sim_utils.MassPropertiesCfg(mass=0.04),
+                collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=True),
+                visual_material=sim_utils.PreviewSurfaceCfg(
+                    diffuse_color=(0.95, 0.35, 0.05), roughness=0.5
+                ),
+                physics_material=sim_utils.RigidBodyMaterialCfg(
+                    friction_combine_mode="max",
+                    restitution_combine_mode="min",
+                    static_friction=1.5,
+                    dynamic_friction=1.2,
+                    restitution=0.0,
+                ),
+            ),
+        )
+    else:
+        object = RigidObjectCfg(
+            prim_path="/World/envs/env_.*/Object",
+            init_state=RigidObjectCfg.InitialStateCfg(
+                pos=(-0.06, 0.36, 0.82), rot=(1.0, 0.0, 0.0, 0.0)
+            ),
+            spawn=sim_utils.UsdFileCfg(
+                usd_path=_beaker_path(),
+                scale=(0.01, 0.01, 0.01),
+                rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                    max_linear_velocity=2.0,
+                    max_angular_velocity=4.0,
+                    max_depenetration_velocity=1.0,
+                ),
+                mass_props=sim_utils.MassPropertiesCfg(mass=0.12),
+                collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=True),
+                visual_material=sim_utils.PreviewSurfaceCfg(
+                    diffuse_color=(0.05, 0.35, 0.95), metallic=0.05, roughness=0.35,
+                ),
+            ),
+        )
 
 
 @configclass

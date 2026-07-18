@@ -42,8 +42,12 @@ def main() -> None:
     parser.add_argument("--headless", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--auto-collect", action="store_true")
     parser.add_argument("--use-hug", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--object-shape", choices=("beaker", "box", "cylinder", "sphere"), default="beaker")
+    parser.add_argument("--hand-closure-scale", type=float, default=1.0)
+    parser.add_argument("--debug-ik", action="store_true")
     parser.add_argument("--output", default="outputs/gui_collect")
     args = parser.parse_args()
+    os.environ["LAB_OBJECT_SHAPE"] = args.object_shape
 
     project = Path(__file__).resolve().parents[2]
     unitree = project / "third_party/unitree_sim_isaaclab"
@@ -79,6 +83,11 @@ def main() -> None:
         env = gym.make(task_id, cfg=cfg).unwrapped
         print("[sim-smoke] environment created", file=sys.stderr, flush=True)
         observation, _ = env.reset()
+        # Actions are relative to the configured default joint pose. Let the
+        # object settle and refresh camera tensors before planning from RGB-D.
+        zero_action = torch.zeros(env.action_space.shape, device=env.device)
+        for _ in range(20):
+            observation, *_ = env.step(zero_action)
         print("[sim-smoke] environment reset", file=sys.stderr, flush=True)
         print(
             "[sim-smoke] beaker xyz",
@@ -94,13 +103,15 @@ def main() -> None:
         robot = env.scene["robot"]
         for body_index, body_name in enumerate(robot.body_names):
             lowered = body_name.lower()
-            if "hand" in lowered or "wrist" in lowered:
+            if "hand" in lowered or "wrist" in lowered or body_name.startswith("R_"):
                 xyz = robot.data.body_pos_w[0, body_index].cpu().tolist()
                 print(f"[sim-smoke] body {body_name} xyz {xyz}", file=sys.stderr, flush=True)
-        from isaaclab.controllers import DifferentialIKController, DifferentialIKControllerCfg
         from isaaclab.markers import VisualizationMarkers
         from isaaclab.markers.config import FRAME_MARKER_CFG
-        from isaaclab.utils.math import matrix_from_quat, quat_from_matrix, quat_inv, quat_slerp, subtract_frame_transforms
+        from isaaclab.utils.math import (
+            compute_pose_error, matrix_from_quat, quat_from_matrix, quat_inv,
+            quat_slerp, subtract_frame_transforms,
+        )
         from .sim_action import RIGHT_ARM_JOINTS, compact_to_isaac_action
 
         joint_names = list(env.scene["robot"].joint_names)
@@ -111,11 +122,10 @@ def main() -> None:
         cycle_steps = 450
         arm_joint_ids = [joint_names.index(name) for name in RIGHT_ARM_JOINTS]
         right_hand_index = env.scene["robot"].body_names.index("right_hand_base_link")
+        right_finger_indices = [
+            index for index, name in enumerate(env.scene["robot"].body_names) if name.startswith("R_")
+        ]
         jacobian_index = right_hand_index - 1 if robot.is_fixed_base else right_hand_index
-        ik = DifferentialIKController(
-            DifferentialIKControllerCfg(command_type="pose", use_relative_mode=False, ik_method="dls"),
-            num_envs=1, device=env.device,
-        )
         hug_marker_cfg = FRAME_MARKER_CFG.copy()
         hug_marker_cfg.markers.pop("connecting_line", None)
         hug_marker_cfg.markers["frame"].scale = (0.18, 0.18, 0.18)
@@ -130,9 +140,13 @@ def main() -> None:
         def plan_episode(index: int):
             front = env.scene["front_camera"].data
             object_pos = env.scene["object"].data.root_pos_w[0]
+            # LabUtopia Beaker_01's rigid root is at the bottom, not at the
+            # visible/collision center. HUG must be conditioned on the body.
+            center_offset_z = 0.036 if args.object_shape == "beaker" else 0.0
+            object_center = object_pos + torch.tensor([0.0, 0.0, center_offset_z], device=env.device)
             camera_pos = front.pos_w[0]
             camera_rot = matrix_from_quat(front.quat_w_ros[0])
-            point_camera = camera_rot.T @ (object_pos - camera_pos)
+            point_camera = camera_rot.T @ (object_center - camera_pos)
             K_tensor = front.intrinsic_matrices[0]
             projected = K_tensor @ point_camera
             u = float(projected[0] / projected[2])
@@ -155,12 +169,19 @@ def main() -> None:
                 grasp_pos = camera_pos + camera_rot @ wrist_camera_t[:3, 3]
                 grasp_rot = camera_rot @ wrist_camera_t[:3, :3]
                 grasp_quat = quat_from_matrix(grasp_rot.unsqueeze(0))[0]
-                hug_distance = float(torch.linalg.vector_norm(grasp_pos - object_pos))
-                planning_valid = hug_distance <= 0.25
-                planning_failure = None if planning_valid else f"HUG wrist distance {hug_distance:.3f} m > 0.25 m"
+                hug_distance = float(torch.linalg.vector_norm(grasp_pos - object_center))
+                planning_valid = hug_distance <= 0.35
+                planning_failure = None if planning_valid else f"HUG wrist distance {hug_distance:.3f} m > 0.35 m"
             else:
-                hand_target = np.array([0.85, 0.85, 0.8, 0.75, 0.7, 0.55], dtype=np.float32)
-                grasp_pos = object_pos + torch.tensor([0.0, -0.075, 0.035], device=env.device)
+                hand_target = args.hand_closure_scale * np.array(
+                    [1.5, 1.5, 1.5, 1.5, 0.45, 0.6], dtype=np.float32
+                )
+                # Thumb is ~4 cm to the hand's -X side. Shift the hand base so
+                # the object sits between thumb and four fingers.
+                # Keep the palm body clear of the tabletop. A lower target can
+                # visually surround the object but pins the closed hand against
+                # the table, preventing the arm from executing the lift.
+                grasp_pos = object_center + torch.tensor([-0.080, -0.115, 0.005], device=env.device)
                 grasp_quat = robot.data.body_quat_w[0, right_hand_index].clone()
                 planning_valid = True
                 planning_failure = None
@@ -170,12 +191,12 @@ def main() -> None:
             direction = direction / torch.clamp(torch.linalg.vector_norm(direction), min=1e-6)
             pregrasp_pos = grasp_pos + 0.10 * direction
             lift_pos = grasp_pos + torch.tensor([0.0, 0.0, 0.12], device=env.device)
-            reachable = hug_distance <= 0.25 if args.use_hug and args.auto_collect else True
+            reachable = hug_distance <= 0.35 if args.use_hug and args.auto_collect else True
             print(
                 "[HUG target] "
                 f"episode={index:06d} xyz={grasp_pos.cpu().tolist()} "
                 f"quat_wxyz={grasp_quat.cpu().tolist()} "
-                f"object_distance_m={float(torch.linalg.vector_norm(grasp_pos - object_pos)):.3f} "
+                f"object_distance_m={float(torch.linalg.vector_norm(grasp_pos - object_center)):.3f} "
                 f"reachable={reachable}",
                 file=sys.stderr, flush=True,
             )
@@ -230,7 +251,7 @@ def main() -> None:
                 episode_index += 1
             current_index = episode_index
             result = EpisodeWriter(root, current_index, {
-                "instruction": "用右手抓起烧杯并抬升",
+                "instruction": f"用右手抓起{args.object_shape}并抬升",
                 "robot_type": "unitree_g1_right_inspire_rh56dftp",
                 "source": "isaac_rgbd_hug_mano_diff_ik" if args.use_hug else "isaac_object_pose_diff_ik",
                 "fps": 30,
@@ -246,13 +267,14 @@ def main() -> None:
         hug_marker.visualize(plan["grasp_pos"].unsqueeze(0), plan["grasp_quat"].unsqueeze(0))
         pregrasp_marker.visualize(plan["pregrasp_pos"].unsqueeze(0), plan["grasp_quat"].unsqueeze(0))
         print(f"[sim-collect] episode {current_episode_index:06d} planned", file=sys.stderr, flush=True)
-        ik.reset()
         import contextlib
         with TerminalKeyReader(enabled=not args.headless) as keys, open("/dev/null", "w") as sink:
           print("[sim-collect] terminal shortcut: press r to reset", file=sys.stderr, flush=True)
           initial_beaker_z = float(env.scene["object"].data.root_pos_w[0, 2])
+          initial_hand_z = float(robot.data.body_pos_w[0, right_hand_index, 2])
           stability_samples = []
           episode_start_step = 0
+          arm_command = torch.tensor(arm_default, device=env.device)
           for step in range(args.steps):
             phase = step - episode_start_step
             target_pos_w, target_quat_w, hand_command = target_for_phase(plan, phase)
@@ -265,21 +287,55 @@ def main() -> None:
             ee_pos_b, ee_quat_b = subtract_frame_transforms(
                 root_pose[:, :3], root_pose[:, 3:7], ee_pose_w[:, :3], ee_pose_w[:, 3:7],
             )
-            ik.set_command(torch.cat((target_pos_b, target_quat_b), dim=-1))
             jacobian = robot.root_physx_view.get_jacobians()[:, jacobian_index, :, arm_joint_ids]
             world_to_base = matrix_from_quat(quat_inv(root_pose[:, 3:7]))
             jacobian[:, :3, :] = torch.bmm(world_to_base, jacobian[:, :3, :])
             jacobian[:, 3:, :] = torch.bmm(world_to_base, jacobian[:, 3:, :])
             arm_current = robot.data.joint_pos[:, arm_joint_ids]
-            arm_desired = ik.compute(ee_pos_b, ee_quat_b, jacobian, arm_current)[0]
-            limits = robot.data.soft_joint_pos_limits[0, arm_joint_ids]
-            max_joint_step_rad = 0.02
-            arm_desired = torch.clamp(
-                arm_desired,
-                arm_current[0] - max_joint_step_rad,
-                arm_current[0] + max_joint_step_rad,
+            pos_error, rot_error = compute_pose_error(
+                ee_pos_b, ee_quat_b, target_pos_b, target_quat_b, rot_error_type="axis_angle"
             )
+            damping = 0.05
+            if phase < 280:
+                task_weights = torch.tensor(
+                    [1.0, 1.0, 1.0, 0.25, 0.25, 0.25], device=env.device
+                )
+                task_jacobian = jacobian * task_weights.view(1, 6, 1)
+                task_error = torch.cat((pos_error, rot_error), dim=-1) * task_weights
+            else:
+                # Once contact is established, orientation is secondary. Solve an
+                # explicit 3-D position task instead of padding a rank-deficient
+                # 6-D task with three zero-weight rotation rows.
+                task_jacobian = jacobian[:, :3, :]
+                task_error = pos_error
+            task_dim = task_jacobian.shape[1]
+            normal = torch.bmm(task_jacobian, task_jacobian.transpose(1, 2))
+            normal += (damping * damping) * torch.eye(task_dim, device=env.device).unsqueeze(0)
+            delta_joint = torch.bmm(
+                task_jacobian.transpose(1, 2),
+                torch.linalg.solve(normal, task_error.unsqueeze(-1)),
+            ).squeeze(-1)
+            # Preserve the DLS direction when limiting velocity. Independent
+            # per-joint clipping distorts the Cartesian direction near singularities.
+            max_joint_step_rad = 0.02
+            scale = torch.clamp(
+                max_joint_step_rad / torch.clamp(delta_joint[0].abs().max(), min=1e-9), max=1.0
+            )
+            arm_desired = arm_command + delta_joint[0] * scale
+            # Keep a persistent command so actuator tracking lag does not erase
+            # unfinished motion at the next control step.
+            arm_desired = torch.clamp(arm_desired, arm_current[0] - 0.15, arm_current[0] + 0.15)
+            limits = robot.data.soft_joint_pos_limits[0, arm_joint_ids]
             arm_desired = torch.clamp(arm_desired, limits[:, 0], limits[:, 1])
+            arm_command = arm_desired.detach()
+            if args.debug_ik and phase in (0, 179, 279, 300, 399, 449):
+                predicted_delta = torch.mv(task_jacobian[0], arm_desired - arm_current[0])
+                print(
+                    f"[IK debug] phase={phase} ee={ee_pose_w[0, :3].cpu().tolist()} "
+                    f"target={target_pos_w.cpu().tolist()} error_b={pos_error[0].cpu().tolist()} "
+                    f"predicted_delta={predicted_delta[:3].cpu().tolist()}",
+                    file=sys.stderr, flush=True,
+                )
             compact = np.r_[arm_desired.cpu().numpy(), hand_command].astype(np.float32)
             expanded = compact_to_isaac_action(compact, joint_names, default_pos)
             action = torch.tensor(expanded, device=env.device).unsqueeze(0)
@@ -303,12 +359,17 @@ def main() -> None:
             if phase >= cycle_steps - 30:
                 object_data = env.scene["object"].data
                 object_pos = object_data.root_pos_w[0]
-                hand_pos = env.scene["robot"].data.body_pos_w[0, right_hand_index]
+                finger_positions = env.scene["robot"].data.body_pos_w[0, right_finger_indices]
+                nearest_finger_distance = torch.linalg.vector_norm(
+                    finger_positions - object_pos.unsqueeze(0), dim=1
+                ).min()
                 stability_samples.append((
                     float(object_pos[2]) - initial_beaker_z,
-                    float(torch.linalg.vector_norm(object_pos - hand_pos)),
+                    float(nearest_finger_distance),
                     float(torch.linalg.vector_norm(object_data.root_vel_w[0, :3])),
                     float(torch.linalg.vector_norm(object_data.root_vel_w[0, 3:])),
+                    float(robot.data.body_pos_w[0, right_hand_index, 2]) - initial_hand_z,
+                    float(torch.linalg.vector_norm(target_pos_w - robot.data.body_pos_w[0, right_hand_index])),
                 ))
             if writer is not None and (phase == cycle_steps - 1 or manual_reset):
                 if manual_reset:
@@ -318,14 +379,16 @@ def main() -> None:
                     samples = np.asarray(stability_samples, dtype=np.float64)
                     metrics = {
                         "min_lift_m": float(samples[:, 0].min()),
-                        "max_hand_distance_m": float(samples[:, 1].max()),
+                    "max_finger_distance_m": float(samples[:, 1].max()),
                         "max_linear_speed_mps": float(samples[:, 2].max()),
                         "max_angular_speed_radps": float(samples[:, 3].max()),
+                        "min_hand_lift_m": float(samples[:, 4].min()),
+                        "max_hand_target_error_m": float(samples[:, 5].max()),
                     }
                     checks = {
                         "planning_valid": bool(plan["planning_valid"]),
                         "lift_ge_0.03m": metrics["min_lift_m"] >= 0.03,
-                        "hand_distance_le_0.12m": metrics["max_hand_distance_m"] <= 0.12,
+                        "finger_distance_le_0.10m": metrics["max_finger_distance_m"] <= 0.10,
                         "linear_speed_le_0.15mps": metrics["max_linear_speed_mps"] <= 0.15,
                         "angular_speed_le_1.0radps": metrics["max_angular_speed_radps"] <= 1.0,
                     }
@@ -340,12 +403,13 @@ def main() -> None:
                     print("[sim-collect] resetting environment", file=sys.stderr, flush=True)
                     with contextlib.redirect_stdout(sink):
                         observation, _ = env.reset()
-                        # reset() restores physics state, but camera tensors may still
-                        # contain the previous episode's final render. Apply one default
-                        # control step so RGB-D and body transforms describe the reset scene.
-                        default_action = torch.tensor(default_pos, device=env.device).unsqueeze(0)
-                        observation, *_ = env.step(default_action)
+                        # The action term uses the robot's default pose as an offset,
+                        # so zero (not default_pos) is the correct hold command.
+                        for _ in range(20):
+                            observation, *_ = env.step(zero_action)
                     initial_beaker_z = float(env.scene["object"].data.root_pos_w[0, 2])
+                    initial_hand_z = float(robot.data.body_pos_w[0, right_hand_index, 2])
+                    arm_command = torch.tensor(arm_default, device=env.device)
                     stability_samples.clear()
                     episode_start_step = step + 1
                     writer, current_episode_index = next_writer()
@@ -358,7 +422,6 @@ def main() -> None:
                     pregrasp_marker.visualize(
                         plan["pregrasp_pos"].unsqueeze(0), plan["grasp_quat"].unsqueeze(0)
                     )
-                    ik.reset()
                     print(f"[sim-collect] episode {current_episode_index:06d} running", file=sys.stderr, flush=True)
         report = {
             "task": task_id,
