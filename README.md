@@ -58,12 +58,17 @@ lab-g1 export-lerobot \
 ```bash
 conda activate hug
 python -m hug.prepare_inputs --dataset-path third_party/hug/data/custom
+python -m lab_g1_collect.hug_condition \
+  third_party/hug/data/custom/custom.pkl --u 122 --v 105
 python -m hug.inference \
   --checkpoint-path checkpoints/hug/hug_full.safetensors \
   --dataset-path third_party/hug/data/custom \
   --num-samples 1 \
   --sampling-steps 2
 ```
+
+`hug_condition` 将交互式 App 的目标点击写成 HUG 批量推理所需的
+`condition_point` 和 PNG 掩码；坐标使用 HUG 的 224×224 模型输入尺度。
 
 HUG 保存的 `grasp_pred/*.pkl` 中包含 `landmarks_3d` 和 `T_camera_wrist`；
 `lab_g1_collect.retarget.load_hug_prediction` 会校验并映射到 RH56DFTP。

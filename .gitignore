@@ -6,4 +6,5 @@ __pycache__/
 .pytest_cache/
 .env
 .cache/
+.playwright-cli/
 *.egg-info/
