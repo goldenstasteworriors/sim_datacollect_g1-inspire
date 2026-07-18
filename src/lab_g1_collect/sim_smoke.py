@@ -11,7 +11,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="启动并单步验证 LabUtopia 烧杯 G1+Inspire 场景")
     parser.add_argument("--steps", type=int, default=2)
     parser.add_argument("--device", default="cpu")
-    parser.add_argument("--headless", action="store_true", default=True)
+    parser.add_argument("--headless", action=argparse.BooleanOptionalAction, default=True)
     args = parser.parse_args()
 
     project = Path(__file__).resolve().parents[2]

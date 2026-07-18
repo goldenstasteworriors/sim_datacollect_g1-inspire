@@ -100,6 +100,8 @@ PYTHONPATH="$PWD:$PWD/third_party/unitree_sim_isaaclab" \
 python -m lab_g1_collect.sim_smoke --device cpu --steps 2
 ```
 
+PC 桌面可视化可使用 `--no-headless`，并把 `--steps` 设置为期望保持窗口的物理步数。
+
 真实 G1 部署沿用 Unitree 官方 DDS：手命令发布到 `rt/inspire/cmd`，状态从
 `rt/inspire/state` 读取。连接真机前应先在仿真检查关节方向、工作空间、碰撞与抓取力度。
 
