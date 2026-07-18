@@ -30,6 +30,19 @@ pip install --no-deps -e third_party/xr_teleoperate/teleop/robot_control/dex-ret
 会重排成 Inspire API 的小指、无名指、中指、食指、拇指弯曲、拇指旋转。输出单位
 为 URDF 弧度并按官方限位裁剪，不再把 `0~1` 归一化量直接当作关节角。
 
+MANO wrist 到 Inspire `R_hand_base_link` 的固定外参保存在
+`configs/mano_inspire_calibration.json`。标定使用 HUG 固定 MANO shape 的 canonical open
+pose 和 Unitree 官方 Inspire URDF：先对齐两个掌面坐标系，再对齐四个 MCP 中心。
+`1.4329` 仅是两者掌长比值，不作为厘米或 SE(3) 平移直接使用。重新生成标定和图：
+
+```bash
+conda activate unitree_sim_env
+python -m lab_g1_collect.calibrate_mano_inspire
+```
+
+标定图保存在 `assets/calibration/mano_inspire_alignment.png`：黑点是 MANO wrist，
+三角形是标定后的 Inspire base，蓝点/橙叉分别是 MANO/Inspire 四个 MCP。
+
 ## 环境
 
 轻量数据流和测试使用现有 `unitree_sim_env`：
