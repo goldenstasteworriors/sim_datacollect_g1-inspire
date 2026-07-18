@@ -18,7 +18,7 @@ HUG_MAX_DEPTH_MM = 3000
 
 def _save_hug_input_debug(
     run_dir: Path, rgb: np.ndarray, depth_mm: np.ndarray, K: np.ndarray,
-    point_uv_224: tuple[float, float],
+    point_uv_224: tuple[float, float], object_name: str,
 ) -> None:
     """保存 HUG 原始输入、224 输入尺度预览和便于检查的元数据。"""
     height, width = rgb.shape[:2]
@@ -62,7 +62,7 @@ def _save_hug_input_debug(
     labels = ImageDraw.Draw(preview)
     labels.text((6, 7), "HUG RGB 224x224", fill="black")
     labels.text((230, 7), f"Depth <3m ({low:.0f}-{high:.0f} mm)", fill="black")
-    labels.text((454, 7), f"Beaker point ({u:.1f}, {v:.1f})", fill="black")
+    labels.text((454, 7), f"{object_name} point ({u:.1f}, {v:.1f})", fill="black")
 
     Image.fromarray(rgb).save(run_dir / "rgb.png")
     Image.fromarray(depth_mm, mode="I;16").save(run_dir / "depth_mm.png")
@@ -77,7 +77,7 @@ def _save_hug_input_debug(
         "hug_size": [224, 224],
         "condition_point_uv_224": [float(u), float(v)],
         "condition_radius_px": radius,
-        "object_name": "beaker",
+        "object_name": object_name,
     }
     (run_dir / "input_metadata.json").write_text(
         json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
@@ -150,7 +150,8 @@ def _save_hug_output_debug(
 
 def run_hug_capture(
     *, project: Path, episode_index: int, rgb: np.ndarray, depth_m: np.ndarray,
-    K: np.ndarray, point_uv_224: tuple[float, float], sampling_steps: int = 10,
+    K: np.ndarray, point_uv_224: tuple[float, float], object_name: str = "beaker",
+    sampling_steps: int = 10,
 ) -> tuple[np.ndarray, np.ndarray]:
     run_dir = project / "outputs" / "hug_runtime" / f"episode_{episode_index:06d}"
     dataset = run_dir / "dataset"
@@ -167,9 +168,9 @@ def run_hug_capture(
     np.savez_compressed(
         capture, rgb=rgb, depth_mm=depth_mm,
         K=K, u_224=np.float32(point_uv_224[0]),
-        v_224=np.float32(point_uv_224[1]),
+        v_224=np.float32(point_uv_224[1]), object_name=np.asarray(object_name),
     )
-    _save_hug_input_debug(run_dir, rgb, depth_mm, K, point_uv_224)
+    _save_hug_input_debug(run_dir, rgb, depth_mm, K, point_uv_224, object_name)
     env = os.environ.copy()
     env.update({
         "PYTHONPATH": f"{project / 'src'}:{project / 'third_party/hug'}",

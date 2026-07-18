@@ -22,13 +22,14 @@ def main() -> None:
     from hug.prepare_inputs import prepare_pkl
 
     capture = np.load(args.capture)
+    object_name = str(capture["object_name"]) if "object_name" in capture else "beaker"
     pkl_path = prepare_pkl(
         capture["rgb"].astype(np.uint8),
         capture["depth_mm"].astype(np.uint16),
         capture["K"].astype(np.float64),
         "sim_capture",
         args.dataset,
-        object_name="beaker",
+        object_name=object_name,
     )
     add_condition_point(pkl_path, float(capture["u_224"]), float(capture["v_224"]), radius=14)
     infer(

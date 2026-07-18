@@ -183,6 +183,7 @@ def main() -> None:
                     rgb=front.output["rgb"][0, ..., :3].cpu().numpy(),
                     depth_m=front.output["distance_to_image_plane"][0].cpu().numpy(),
                     K=K_tensor.cpu().numpy(), point_uv_224=(u_224, v_224),
+                    object_name=args.object_shape,
                 )
                 wrist_camera_t = torch.tensor(wrist_camera, device=env.device)
                 grasp_pos = camera_pos + camera_rot @ wrist_camera_t[:3, 3]
