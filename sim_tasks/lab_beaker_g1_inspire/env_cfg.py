@@ -11,6 +11,7 @@ from tasks.g1_tasks.pick_place_cylinder_g1_29dof_inspire.pickplace_cylinder_g1_2
     ObjectTableSceneCfg,
     PickPlaceG129InspireBaseFixEnvCfg,
 )
+from tasks.common_config import CameraPresets
 
 
 def _beaker_path() -> str:
@@ -29,7 +30,7 @@ class LabBeakerSceneCfg(ObjectTableSceneCfg):
         init_state=RigidObjectCfg.InitialStateCfg(pos=(-0.35, 0.40, 0.82), rot=(1.0, 0.0, 0.0, 0.0)),
         spawn=sim_utils.UsdFileCfg(
             usd_path=_beaker_path(),
-            scale=(0.01, 0.01, 0.01),
+            scale=(1.0, 1.0, 1.0),
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
                 max_linear_velocity=2.0,
                 max_angular_velocity=4.0,
@@ -45,3 +46,5 @@ class LabBeakerSceneCfg(ObjectTableSceneCfg):
 class LabBeakerG1InspireEnvCfg(PickPlaceG129InspireBaseFixEnvCfg):
     scene: LabBeakerSceneCfg = LabBeakerSceneCfg(num_envs=1, env_spacing=2.5, replicate_physics=True)
 
+
+LabBeakerSceneCfg.front_camera.data_types = ["rgb", "distance_to_image_plane"]

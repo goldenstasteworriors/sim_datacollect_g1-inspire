@@ -12,6 +12,8 @@ def main() -> None:
     parser.add_argument("--steps", type=int, default=2)
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--headless", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--auto-collect", action="store_true")
+    parser.add_argument("--output", default="outputs/gui_collect")
     args = parser.parse_args()
 
     project = Path(__file__).resolve().parents[2]
@@ -48,16 +50,58 @@ def main() -> None:
         observation, _ = env.reset()
         print("[sim-smoke] environment reset", file=sys.stderr, flush=True)
         from .sim_action import RIGHT_ARM_JOINTS, compact_to_isaac_action
+        from .trajectory import generate_grasp_trajectory
 
         joint_names = list(env.scene["robot"].joint_names)
         default_pos = env.scene["robot"].data.default_joint_pos[0].cpu().numpy()
         import numpy as np
 
         arm_default = np.array([default_pos[joint_names.index(name)] for name in RIGHT_ARM_JOINTS], dtype=np.float32)
+        grasp_arm = np.array([0.35, -0.30, 0.10, 1.05, 0.0, 0.42, 0.0], dtype=np.float32)
+        lift_arm = grasp_arm + np.array([-0.12, 0, 0, -0.18, 0, 0, 0], dtype=np.float32)
+        trajectory = generate_grasp_trajectory(
+            arm_default, grasp_arm, lift_arm,
+            np.array([0.85, 0.85, 0.8, 0.75, 0.7, 0.55], dtype=np.float32),
+            fps=100, seconds=4.0,
+        )
         expanded = compact_to_isaac_action(np.r_[arm_default, np.zeros(6, dtype=np.float32)], joint_names, default_pos)
-        for _ in range(args.steps):
+        writer = None
+        capture_stride = 3
+        if args.auto_collect:
+            from .dataset import EpisodeWriter
+            root = Path(args.output)
+            episode_index = 0
+            while (root / f"episode_{episode_index:06d}").exists():
+                episode_index += 1
+            writer = EpisodeWriter(root, episode_index, {
+                "instruction": "用右手抓起烧杯并抬升",
+                "robot_type": "unitree_g1_right_inspire_rh56dftp",
+                "source": "isaac_gui_scripted",
+                "fps": 30,
+            })
+        import contextlib
+        with open("/dev/null", "w") as sink:
+          for step in range(args.steps):
+            compact = trajectory[step % len(trajectory)]
+            expanded = compact_to_isaac_action(compact, joint_names, default_pos)
             action = torch.tensor(expanded, device=env.device).unsqueeze(0)
-            observation, *_ = env.step(action)
+            with contextlib.redirect_stdout(sink):
+                observation, *_ = env.step(action)
+            if writer is not None and step < len(trajectory) and step % capture_stride == 0:
+                robot_pos = env.scene["robot"].data.joint_pos[0].cpu().numpy()
+                arm_state = np.array([robot_pos[joint_names.index(name)] for name in RIGHT_ARM_JOINTS])
+                front = env.scene["front_camera"].data.output
+                wrist = env.scene["right_wrist_camera"].data.output
+                writer.add_frame(
+                    timestamp=step * 0.01,
+                    state=np.r_[arm_state, compact[7:]], action=compact,
+                    images={"front": front["rgb"][0, ..., :3].cpu().numpy(),
+                            "right_wrist": wrist["rgb"][0, ..., :3].cpu().numpy()},
+                    depth=front["distance_to_image_plane"][0].cpu().numpy(),
+                )
+            if writer is not None and step == len(trajectory) - 1:
+                print(f"[sim-collect] saved {writer.finish()}", file=sys.stderr, flush=True)
+                writer = None
         report = {
             "task": task_id,
             "action_shape": list(env.action_space.shape),
