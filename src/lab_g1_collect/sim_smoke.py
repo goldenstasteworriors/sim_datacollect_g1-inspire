@@ -62,6 +62,12 @@ def main() -> None:
         bound = UsdGeom.BBoxCache(Usd.TimeCode.Default(), ["default", "render", "proxy"])
         box = bound.ComputeWorldBound(stage.GetPrimAtPath("/World/envs/env_0/Object")).ComputeAlignedBox()
         print("[sim-smoke] beaker bbox", box.GetMin(), box.GetMax(), file=sys.stderr, flush=True)
+        robot = env.scene["robot"]
+        for body_index, body_name in enumerate(robot.body_names):
+            lowered = body_name.lower()
+            if "hand" in lowered or "wrist" in lowered:
+                xyz = robot.data.body_pos_w[0, body_index].cpu().tolist()
+                print(f"[sim-smoke] body {body_name} xyz {xyz}", file=sys.stderr, flush=True)
         from .sim_action import RIGHT_ARM_JOINTS, compact_to_isaac_action
         from .trajectory import generate_grasp_trajectory
 
