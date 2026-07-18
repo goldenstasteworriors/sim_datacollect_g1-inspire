@@ -2,9 +2,37 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import select
 import sys
+import termios
 import traceback
+import tty
 from pathlib import Path
+
+
+class TerminalKeyReader:
+    """Non-blocking single-key input while preserving the terminal on exit."""
+
+    def __init__(self, enabled: bool):
+        self.enabled = enabled and sys.stdin.isatty()
+        self.fd = sys.stdin.fileno() if self.enabled else None
+        self.previous = None
+
+    def __enter__(self):
+        if self.enabled:
+            self.previous = termios.tcgetattr(self.fd)
+            tty.setcbreak(self.fd)
+        return self
+
+    def read(self) -> str | None:
+        if self.enabled and select.select([self.fd], [], [], 0.0)[0]:
+            return os.read(self.fd, 1).decode(errors="ignore").lower()
+        return None
+
+    def __exit__(self, _type, _value, _traceback):
+        if self.previous is not None:
+            termios.tcsetattr(self.fd, termios.TCSADRAIN, self.previous)
 
 
 def main() -> None:
@@ -220,11 +248,13 @@ def main() -> None:
         print(f"[sim-collect] episode {current_episode_index:06d} planned", file=sys.stderr, flush=True)
         ik.reset()
         import contextlib
-        with open("/dev/null", "w") as sink:
+        with TerminalKeyReader(enabled=not args.headless) as keys, open("/dev/null", "w") as sink:
+          print("[sim-collect] terminal shortcut: press r to reset", file=sys.stderr, flush=True)
           initial_beaker_z = float(env.scene["object"].data.root_pos_w[0, 2])
           stability_samples = []
+          episode_start_step = 0
           for step in range(args.steps):
-            phase = step % cycle_steps
+            phase = step - episode_start_step
             target_pos_w, target_quat_w, hand_command = target_for_phase(plan, phase)
             root_pose = robot.data.root_pose_w
             target_pos_b, target_quat_b = subtract_frame_transforms(
@@ -267,6 +297,9 @@ def main() -> None:
                             "right_wrist": wrist["rgb"][0, ..., :3].cpu().numpy()},
                     depth=front["distance_to_image_plane"][0].cpu().numpy(),
                 )
+            manual_reset = keys.read() == "r"
+            if manual_reset:
+                print("[sim-collect] manual reset requested", file=sys.stderr, flush=True)
             if phase >= cycle_steps - 30:
                 object_data = env.scene["object"].data
                 object_pos = object_data.root_pos_w[0]
@@ -277,28 +310,33 @@ def main() -> None:
                     float(torch.linalg.vector_norm(object_data.root_vel_w[0, :3])),
                     float(torch.linalg.vector_norm(object_data.root_vel_w[0, 3:])),
                 ))
-            if writer is not None and phase == cycle_steps - 1:
-                samples = np.asarray(stability_samples, dtype=np.float64)
-                metrics = {
-                    "min_lift_m": float(samples[:, 0].min()),
-                    "max_hand_distance_m": float(samples[:, 1].max()),
-                    "max_linear_speed_mps": float(samples[:, 2].max()),
-                    "max_angular_speed_radps": float(samples[:, 3].max()),
-                }
-                checks = {
-                    "planning_valid": bool(plan["planning_valid"]),
-                    "lift_ge_0.03m": metrics["min_lift_m"] >= 0.03,
-                    "hand_distance_le_0.12m": metrics["max_hand_distance_m"] <= 0.12,
-                    "linear_speed_le_0.15mps": metrics["max_linear_speed_mps"] <= 0.15,
-                    "angular_speed_le_1.0radps": metrics["max_angular_speed_radps"] <= 1.0,
-                }
+            if writer is not None and (phase == cycle_steps - 1 or manual_reset):
+                if manual_reset:
+                    metrics = {"manual_reset": True, "phase": phase}
+                    checks = {"manual_reset": False}
+                else:
+                    samples = np.asarray(stability_samples, dtype=np.float64)
+                    metrics = {
+                        "min_lift_m": float(samples[:, 0].min()),
+                        "max_hand_distance_m": float(samples[:, 1].max()),
+                        "max_linear_speed_mps": float(samples[:, 2].max()),
+                        "max_angular_speed_radps": float(samples[:, 3].max()),
+                    }
+                    checks = {
+                        "planning_valid": bool(plan["planning_valid"]),
+                        "lift_ge_0.03m": metrics["min_lift_m"] >= 0.03,
+                        "hand_distance_le_0.12m": metrics["max_hand_distance_m"] <= 0.12,
+                        "linear_speed_le_0.15mps": metrics["max_linear_speed_mps"] <= 0.15,
+                        "angular_speed_le_1.0radps": metrics["max_angular_speed_radps"] <= 1.0,
+                    }
                 metrics["checks"] = checks
                 status = "success" if all(checks.values()) else "failed"
                 saved = writer.finish(status=status, metrics=metrics)
                 print(f"[sim-collect] {status}: {saved} {metrics}", file=sys.stderr, flush=True)
                 writer = None
                 # Do not create a trailing .incomplete episode in finite runs.
-                if args.steps - (step + 1) >= cycle_steps:
+                enough_for_next = args.steps - (step + 1) >= cycle_steps
+                if enough_for_next or (manual_reset and step + 1 < args.steps):
                     print("[sim-collect] resetting environment", file=sys.stderr, flush=True)
                     with contextlib.redirect_stdout(sink):
                         observation, _ = env.reset()
@@ -309,6 +347,7 @@ def main() -> None:
                         observation, *_ = env.step(default_action)
                     initial_beaker_z = float(env.scene["object"].data.root_pos_w[0, 2])
                     stability_samples.clear()
+                    episode_start_step = step + 1
                     writer, current_episode_index = next_writer()
                     print(
                         f"[sim-collect] episode {current_episode_index:06d} planning with fresh RGB-D",
