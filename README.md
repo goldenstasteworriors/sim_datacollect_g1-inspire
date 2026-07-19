@@ -149,6 +149,19 @@ pre-grasp/grasp 到点门控可能增加物理等待步数。
 `--hug-candidates` 和 `--hug-sampling-steps` 调节 HUG 推理。`--debug-ik` 会打印关键阶段的末端目标、
 位置误差和雅可比预测位移。
 
+当前自动采集不再使用 Pinocchio/SciPy 离线 IK 过滤 HUG 候选，也不再把离线关节解
+混入执行命令。8 个候选只按 Inspire base 到物体中心的几何距离选择；实际手臂控制
+是本项目在 Isaac PhysX Jacobian 上实现的阻尼最小二乘（DLS）在线 IK，代码位于
+`src/lab_g1_collect/sim_smoke.py`。它不是 IsaacLab 官方 `DifferentialIKController`。
+在线到点门控仍会记录实际末端未能在规定时间进入 40 mm 容差的执行失败，但不再把它
+表述为离线模型证明的运动学不可达。
+
+`--ik-rotation-weight 0` 可做仅位置 IK 对照。一次去除离线 IK 后的圆柱实测中，默认
+姿态权重在 pre-grasp 超时，剩余位置误差 97 mm；仅位置控制能够越过 pre-grasp，
+但在后续 100 mm 直线 approach 末端仍剩余 97 mm，且关节限位余量约 0.85 rad。
+这表明当前瓶颈确实在自写在线 DLS/位置执行链路，而不是关节到达限位；后续超时日志
+使用 `tracking timeout`，不再写成未经证明的 `unreachable`。
+
 已有 episode 可用下面的诊断工具区分目标轨迹跟踪误差与离线 Pinocchio/Isaac FK
 不一致。图中的红点只表示在线跟踪误差首次超过门限，不能在 FK 模型一致性验证通过前
 解释为该 Cartesian 点在物理上不可达：

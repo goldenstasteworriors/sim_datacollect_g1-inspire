@@ -49,6 +49,10 @@ def main() -> None:
     parser.add_argument("--hug-candidates", type=int, default=8)
     parser.add_argument("--debug-ik", action="store_true")
     parser.add_argument(
+        "--ik-rotation-weight", type=float, default=0.25,
+        help="pre-grasp/grasp 阶段 DLS 姿态误差权重；0 用于仅验证位置可达性",
+    )
+    parser.add_argument(
         "--ik-command-integration", type=float, default=0.95,
         help="将当前 DLS 修正累积到上次位置命令的比例（0 表示不累积）",
     )
@@ -211,7 +215,6 @@ def main() -> None:
             start_pos = robot.data.body_pos_w[0, right_hand_index].clone()
             start_quat = robot.data.body_quat_w[0, right_hand_index].clone()
             if args.use_hug and args.auto_collect:
-                from .arm_ik import right_arm_frame_correction, solve_right_arm_ik
                 from .hug_bridge import run_hug_capture
                 hug_candidates = run_hug_capture(
                     project=project, episode_index=index,
@@ -223,19 +226,8 @@ def main() -> None:
                     candidates=args.hug_candidates,
                     return_candidates=True,
                 )
-                root_pose = robot.data.root_pose_w
-                current_arm = robot.data.joint_pos[0, arm_joint_ids].cpu().numpy()
-                current_ee = robot.data.body_pose_w[:, right_hand_index]
-                current_pos_b, current_quat_b = subtract_frame_transforms(
-                    root_pose[:, :3], root_pose[:, 3:7],
-                    current_ee[:, :3], current_ee[:, 3:7],
-                )
-                frame_correction = right_arm_frame_correction(
-                    current_arm, current_pos_b[0].cpu().numpy(),
-                    matrix_from_quat(current_quat_b)[0].cpu().numpy(),
-                )
                 evaluated = []
-                for candidate_offset, (name, wrist_camera, candidate_hand) in enumerate(hug_candidates):
+                for name, wrist_camera, candidate_hand in hug_candidates:
                     wrist_camera_t = torch.tensor(wrist_camera, device=env.device)
                     candidate_pos = camera_pos + camera_rot @ wrist_camera_t[:3, 3]
                     candidate_rot = camera_rot @ wrist_camera_t[:3, :3]
@@ -245,53 +237,20 @@ def main() -> None:
                     direction = direction / torch.clamp(torch.linalg.vector_norm(direction), min=1e-6)
                     candidate_pregrasp = candidate_pos + 0.10 * direction
 
-                    grasp_pos_b, grasp_quat_b = subtract_frame_transforms(
-                        root_pose[:, :3], root_pose[:, 3:7],
-                        candidate_pos.unsqueeze(0), candidate_quat.unsqueeze(0),
-                    )
-                    pre_pos_b, pre_quat_b = subtract_frame_transforms(
-                        root_pose[:, :3], root_pose[:, 3:7],
-                        candidate_pregrasp.unsqueeze(0), candidate_quat.unsqueeze(0),
-                    )
-                    grasp_ik = solve_right_arm_ik(
-                        grasp_pos_b[0].cpu().numpy(),
-                        matrix_from_quat(grasp_quat_b)[0].cpu().numpy(), current_arm,
-                        frame_correction=frame_correction,
-                        seed=args.seed + index * 100 + candidate_offset,
-                    )
-                    pregrasp_ik = solve_right_arm_ik(
-                        pre_pos_b[0].cpu().numpy(),
-                        matrix_from_quat(pre_quat_b)[0].cpu().numpy(), current_arm,
-                        frame_correction=frame_correction,
-                        seed=args.seed + index * 100 + candidate_offset + 10_000,
-                    )
-                    feasible = bool(
-                        grasp_ik["reachable"] and pregrasp_ik["reachable"]
-                        and 0.10 <= distance <= 0.22
-                        and grasp_ik["joint_limit_margin_rad"] >= 0.05
-                    )
-                    score = (
-                        abs(distance - 0.14) * 10.0
-                        + grasp_ik["position_error_m"] + pregrasp_ik["position_error_m"]
-                        + 0.05 * (grasp_ik["rotation_error_rad"] + pregrasp_ik["rotation_error_rad"])
-                        + 0.01 * grasp_ik["joint_motion_rad"]
-                        + 0.002 / max(grasp_ik["joint_limit_margin_rad"], 1e-3)
-                        + (0.0 if feasible else 100.0)
-                    )
+                    in_distance_range = 0.10 <= distance <= 0.22
+                    # Do not infer Isaac reachability from the separate Pinocchio
+                    # URDF. Prefer a geometrically plausible HUG wrist distance;
+                    # the Isaac-native online IK is solely responsible for motion.
+                    score = abs(distance - 0.14) + (0.0 if in_distance_range else 10.0)
                     evaluated.append({
-                        "name": name, "score": score, "feasible": feasible,
+                        "name": name, "score": score, "in_distance_range": in_distance_range,
                         "grasp_pos": candidate_pos, "pregrasp_pos": candidate_pregrasp,
                         "grasp_quat": candidate_quat, "hand": candidate_hand,
-                        "distance": distance, "grasp_ik": grasp_ik, "pregrasp_ik": pregrasp_ik,
+                        "distance": distance,
                     })
                     print(
-                        f"[IK candidate] {name} feasible={feasible} distance={distance:.3f} "
-                        f"pre=({pregrasp_ik['position_error_m']:.3f}m,"
-                        f"{pregrasp_ik['rotation_error_rad']:.3f}rad) "
-                        f"grasp=({grasp_ik['position_error_m']:.3f}m,"
-                        f"{grasp_ik['rotation_error_rad']:.3f}rad) "
-                        f"motion={grasp_ik['joint_motion_rad']:.2f}rad "
-                        f"margin={grasp_ik['joint_limit_margin_rad']:.2f}rad",
+                        f"[HUG candidate] {name} distance={distance:.3f} "
+                        f"in_distance_range={in_distance_range}",
                         file=sys.stderr, flush=True,
                     )
                 selected = min(evaluated, key=lambda item: item["score"])
@@ -299,12 +258,11 @@ def main() -> None:
                 grasp_quat = selected["grasp_quat"]
                 hand_target = selected["hand"]
                 hug_distance = selected["distance"]
-                planning_valid = bool(selected["feasible"])
-                planning_failure = None if planning_valid else "8个HUG候选均未通过G1右臂6D IK"
-                pregrasp_arm_target = selected["pregrasp_ik"]["joint_positions"]
-                grasp_arm_target = selected["grasp_ik"]["joint_positions"]
+                planning_valid = True
+                planning_failure = None
                 print(
-                    f"[IK candidate] selected={selected['name']} feasible={selected['feasible']}",
+                    f"[HUG candidate] selected={selected['name']} "
+                    f"distance={selected['distance']:.3f}",
                     file=sys.stderr, flush=True,
                 )
             else:
@@ -320,8 +278,6 @@ def main() -> None:
                 grasp_quat = robot.data.body_quat_w[0, right_hand_index].clone()
                 planning_valid = True
                 planning_failure = None
-                pregrasp_arm_target = arm_default.copy()
-                grasp_arm_target = arm_default.copy()
             # Retreat radially away from the object rather than towards the
             # hand's initial position.  The latter can put the pre-grasp on the
             # object side of a bad/noisy grasp and make the open hand collide
@@ -336,14 +292,14 @@ def main() -> None:
             retreat_direction = retreat_direction / torch.clamp(retreat_norm, min=1e-6)
             pregrasp_pos = grasp_pos + 0.10 * retreat_direction
             lift_pos = grasp_pos + torch.tensor([0.0, 0.0, 0.12], device=env.device)
-            reachable = hug_distance <= 0.35 if args.use_hug and args.auto_collect else True
+            within_coarse_workspace = hug_distance <= 0.35 if args.use_hug and args.auto_collect else True
             print(
                 "[HUG target] "
                 f"episode={index:06d} xyz={grasp_pos.cpu().tolist()} "
                 f"quat_wxyz={grasp_quat.cpu().tolist()} "
                 f"object_distance_m={float(torch.linalg.vector_norm(grasp_pos - object_center)):.3f} "
                 f"pregrasp_object_distance_m={float(torch.linalg.vector_norm(pregrasp_pos - object_center)):.3f} "
-                f"reachable={reachable}",
+                f"within_coarse_workspace={within_coarse_workspace}",
                 file=sys.stderr, flush=True,
             )
             if not planning_valid:
@@ -359,8 +315,6 @@ def main() -> None:
                 "uv_224": (u_224, v_224),
                 "planning_valid": planning_valid,
                 "planning_failure": planning_failure,
-                "pregrasp_arm_target": np.asarray(pregrasp_arm_target, dtype=np.float32),
-                "grasp_arm_target": np.asarray(grasp_arm_target, dtype=np.float32),
             }
 
         def target_for_phase(plan: dict, phase: int):
@@ -449,8 +403,10 @@ def main() -> None:
             )
             damping = 0.05
             if phase < close_end:
+                rotation_weight = float(np.clip(args.ik_rotation_weight, 0.0, 1.0))
                 task_weights = torch.tensor(
-                    [1.0, 1.0, 1.0, 0.25, 0.25, 0.25], device=env.device
+                    [1.0, 1.0, 1.0, rotation_weight, rotation_weight, rotation_weight],
+                    device=env.device,
                 )
                 task_jacobian = jacobian * task_weights.view(1, 6, 1)
                 task_error = torch.cat((pos_error, rot_error), dim=-1) * task_weights
@@ -483,26 +439,9 @@ def main() -> None:
             # tracking error and overshoots. Blend a bounded fraction of the
             # DLS correction into the previous command as actuator feed-forward.
             integration = float(np.clip(args.ik_command_integration, 0.0, 1.0))
-            if phase < pregrasp_end:
-                posture_alpha = phase / float(pregrasp_end - 1)
-                posture_target = torch.lerp(
-                    torch.tensor(arm_default, device=env.device),
-                    torch.tensor(plan["pregrasp_arm_target"], device=env.device),
-                    posture_alpha,
-                )
-            elif phase < grasp_end:
-                posture_alpha = (phase - pregrasp_end) / float(grasp_end - pregrasp_end - 1)
-                posture_target = torch.lerp(
-                    torch.tensor(plan["pregrasp_arm_target"], device=env.device),
-                    torch.tensor(plan["grasp_arm_target"], device=env.device),
-                    posture_alpha,
-                )
-            else:
-                posture_target = torch.tensor(plan["grasp_arm_target"], device=env.device)
             arm_desired = (
                 arm_current[0] + delta_joint[0] * scale
                 + integration * (arm_command - arm_current[0])
-                + 0.05 * (posture_target - arm_current[0])
             )
             command_lead = float(np.clip(args.ik_max_command_lead, 0.01, 0.15))
             if pregrasp_end <= phase < grasp_end:
@@ -521,7 +460,9 @@ def main() -> None:
                 print(
                     f"[IK debug] phase={phase} ee={ee_pose_w[0, :3].cpu().tolist()} "
                     f"target={target_pos_w.cpu().tolist()} error_b={pos_error[0].cpu().tolist()} "
-                    f"predicted_delta={predicted_delta[:3].cpu().tolist()}",
+                    f"rotation_error_rad={float(torch.linalg.vector_norm(rot_error[0])):.4f} "
+                    f"predicted_delta={predicted_delta[:3].cpu().tolist()} "
+                    f"joint_limit_margin_rad={float(torch.minimum(arm_current[0] - limits[:, 0], limits[:, 1] - arm_current[0]).min()):.4f}",
                     file=sys.stderr, flush=True,
                 )
             compact = np.r_[arm_desired.cpu().numpy(), hand_command].astype(np.float32)
@@ -653,7 +594,7 @@ def main() -> None:
                         )
                 else:
                     failure = (
-                        f"IK {gate[0]} unreachable: error {measured_error:.4f} m "
+                        f"IK {gate[0]} tracking timeout: error {measured_error:.4f} m "
                         f"after {waypoint_wait_steps} wait steps"
                     )
                     plan["planning_valid"] = False
