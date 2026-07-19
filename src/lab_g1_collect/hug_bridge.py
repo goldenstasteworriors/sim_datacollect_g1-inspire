@@ -152,7 +152,8 @@ def run_hug_capture(
     *, project: Path, episode_index: int, rgb: np.ndarray, depth_m: np.ndarray,
     K: np.ndarray, point_uv_224: tuple[float, float], object_name: str = "beaker",
     sampling_steps: int = 5, candidates: int = 8, debug_stride: int = 10,
-) -> tuple[np.ndarray, np.ndarray]:
+    return_candidates: bool = False,
+):
     run_dir = project / "outputs" / "hug_runtime" / f"episode_{episode_index:06d}"
     dataset = run_dir / "dataset"
     dataset.mkdir(parents=True, exist_ok=True)
@@ -194,6 +195,12 @@ def run_hug_capture(
     ]
     subprocess.run(command, cwd=project, env=env, check=True, timeout=180)
     prediction_path = dataset / "grasp_pred" / "sim_capture.pkl"
+    if return_candidates:
+        outputs = []
+        for candidate_path in sorted((dataset / "grasp_pred").glob("candidate_*.pkl")):
+            candidate_pose, candidate_hand = load_hug_prediction(candidate_path)
+            outputs.append((candidate_path.stem, candidate_pose, candidate_hand))
+        return outputs
     wrist, landmarks = load_hug_geometry(prediction_path)
     if save_debug:
         _save_hug_output_debug(run_dir, rgb, K, wrist, landmarks)

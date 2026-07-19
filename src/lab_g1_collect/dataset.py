@@ -52,13 +52,14 @@ class EpisodeWriter:
             self.ee_actual.append(actual)
             self.ee_target.append(target)
 
-    def finish(self, *, status: str = "success", metrics: dict | None = None) -> Path:
+    def finish(self, *, status: str = "success", metrics: dict | None = None,
+               keep_visuals: bool = True) -> Path:
         if not self.rows:
             raise RuntimeError("不能提交空 episode")
         if status not in {"success", "failed"}:
             raise ValueError(f"不支持的 episode 状态: {status}")
         arrays = {"observation.state": np.stack(self.states), "action": np.stack(self.actions)}
-        if self.depths:
+        if self.depths and keep_visuals:
             if len(self.depths) != len(self.rows):
                 raise RuntimeError("depth 帧数与 episode 帧数不一致")
             arrays["observation.depth"] = np.stack(self.depths)
@@ -67,6 +68,11 @@ class EpisodeWriter:
                 raise RuntimeError("末端位姿帧数与 episode 帧数不一致")
             arrays["observation.ee_pose_w"] = np.stack(self.ee_actual)
             arrays["target.ee_pose_w"] = np.stack(self.ee_target)
+        if not keep_visuals:
+            for row in self.rows:
+                for relative in row["images"].values():
+                    (self.work / relative).unlink(missing_ok=True)
+                row["images"] = {}
         np.savez_compressed(self.work / "episode.npz", **arrays)
         (self.work / "frames.jsonl").write_text(
             "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in self.rows), encoding="utf-8"

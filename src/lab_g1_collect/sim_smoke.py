@@ -63,6 +63,9 @@ def main() -> None:
     parser.add_argument("--output", default="outputs/gui_collect")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--object-randomization-m", type=float, default=0.04)
+    parser.add_argument("--episodes", type=int, default=None)
+    parser.add_argument("--keep-success-visuals", type=int, default=5)
+    parser.add_argument("--keep-failure-visuals", type=int, default=5)
     args = parser.parse_args()
     episode_rng = random.Random(args.seed)
     os.environ["LAB_OBJECT_SHAPE"] = args.object_shape
@@ -205,9 +208,12 @@ def main() -> None:
             v_224 = (v - (height - square) / 2.0) * 224.0 / square
             if not (0 <= u_224 < 224 and 0 <= v_224 < 224):
                 raise RuntimeError(f"烧杯条件点不在 HUG 图像内: {(u_224, v_224)}")
+            start_pos = robot.data.body_pos_w[0, right_hand_index].clone()
+            start_quat = robot.data.body_quat_w[0, right_hand_index].clone()
             if args.use_hug and args.auto_collect:
+                from .arm_ik import solve_right_arm_ik
                 from .hug_bridge import run_hug_capture
-                wrist_camera, hand_target = run_hug_capture(
+                hug_candidates = run_hug_capture(
                     project=project, episode_index=index,
                     rgb=front.output["rgb"][0, ..., :3].cpu().numpy(),
                     depth_m=front.output["distance_to_image_plane"][0].cpu().numpy(),
@@ -215,14 +221,72 @@ def main() -> None:
                     object_name=args.object_shape,
                     sampling_steps=args.hug_sampling_steps,
                     candidates=args.hug_candidates,
+                    return_candidates=True,
                 )
-                wrist_camera_t = torch.tensor(wrist_camera, device=env.device)
-                grasp_pos = camera_pos + camera_rot @ wrist_camera_t[:3, 3]
-                grasp_rot = camera_rot @ wrist_camera_t[:3, :3]
-                grasp_quat = quat_from_matrix(grasp_rot.unsqueeze(0))[0]
-                hug_distance = float(torch.linalg.vector_norm(grasp_pos - object_center))
-                planning_valid = hug_distance <= 0.35
-                planning_failure = None if planning_valid else f"HUG wrist distance {hug_distance:.3f} m > 0.35 m"
+                root_pose = robot.data.root_pose_w
+                current_arm = robot.data.joint_pos[0, arm_joint_ids].cpu().numpy()
+                evaluated = []
+                for candidate_offset, (name, wrist_camera, candidate_hand) in enumerate(hug_candidates):
+                    wrist_camera_t = torch.tensor(wrist_camera, device=env.device)
+                    candidate_pos = camera_pos + camera_rot @ wrist_camera_t[:3, 3]
+                    candidate_rot = camera_rot @ wrist_camera_t[:3, :3]
+                    candidate_quat = quat_from_matrix(candidate_rot.unsqueeze(0))[0]
+                    direction = candidate_pos - object_center
+                    distance = float(torch.linalg.vector_norm(direction))
+                    direction = direction / torch.clamp(torch.linalg.vector_norm(direction), min=1e-6)
+                    candidate_pregrasp = candidate_pos + 0.10 * direction
+
+                    grasp_pos_b, grasp_quat_b = subtract_frame_transforms(
+                        root_pose[:, :3], root_pose[:, 3:7],
+                        candidate_pos.unsqueeze(0), candidate_quat.unsqueeze(0),
+                    )
+                    pre_pos_b, pre_quat_b = subtract_frame_transforms(
+                        root_pose[:, :3], root_pose[:, 3:7],
+                        candidate_pregrasp.unsqueeze(0), candidate_quat.unsqueeze(0),
+                    )
+                    grasp_ik = solve_right_arm_ik(
+                        grasp_pos_b[0].cpu().numpy(),
+                        matrix_from_quat(grasp_quat_b)[0].cpu().numpy(), current_arm,
+                        seed=args.seed + index * 100 + candidate_offset,
+                    )
+                    pregrasp_ik = solve_right_arm_ik(
+                        pre_pos_b[0].cpu().numpy(),
+                        matrix_from_quat(pre_quat_b)[0].cpu().numpy(), current_arm,
+                        seed=args.seed + index * 100 + candidate_offset + 10_000,
+                    )
+                    feasible = bool(grasp_ik["reachable"] and pregrasp_ik["reachable"])
+                    score = (
+                        abs(distance - 0.14) * 10.0
+                        + grasp_ik["position_error_m"] + pregrasp_ik["position_error_m"]
+                        + 0.05 * (grasp_ik["rotation_error_rad"] + pregrasp_ik["rotation_error_rad"])
+                        + 0.01 * grasp_ik["joint_motion_rad"]
+                        + (0.0 if feasible else 100.0)
+                    )
+                    evaluated.append({
+                        "name": name, "score": score, "feasible": feasible,
+                        "grasp_pos": candidate_pos, "pregrasp_pos": candidate_pregrasp,
+                        "grasp_quat": candidate_quat, "hand": candidate_hand,
+                        "distance": distance, "grasp_ik": grasp_ik, "pregrasp_ik": pregrasp_ik,
+                    })
+                    print(
+                        f"[IK candidate] {name} feasible={feasible} distance={distance:.3f} "
+                        f"pre=({pregrasp_ik['position_error_m']:.3f}m,"
+                        f"{pregrasp_ik['rotation_error_rad']:.3f}rad) "
+                        f"grasp=({grasp_ik['position_error_m']:.3f}m,"
+                        f"{grasp_ik['rotation_error_rad']:.3f}rad)",
+                        file=sys.stderr, flush=True,
+                    )
+                selected = min(evaluated, key=lambda item: item["score"])
+                grasp_pos = selected["grasp_pos"]
+                grasp_quat = selected["grasp_quat"]
+                hand_target = selected["hand"]
+                hug_distance = selected["distance"]
+                planning_valid = bool(selected["feasible"] and hug_distance <= 0.35)
+                planning_failure = None if planning_valid else "8个HUG候选均未通过G1右臂6D IK"
+                print(
+                    f"[IK candidate] selected={selected['name']} feasible={selected['feasible']}",
+                    file=sys.stderr, flush=True,
+                )
             else:
                 hand_target = args.hand_closure_scale * np.array(
                     [1.5, 1.5, 1.5, 1.5, 0.45, 0.6], dtype=np.float32
@@ -236,8 +300,6 @@ def main() -> None:
                 grasp_quat = robot.data.body_quat_w[0, right_hand_index].clone()
                 planning_valid = True
                 planning_failure = None
-            start_pos = robot.data.body_pos_w[0, right_hand_index].clone()
-            start_quat = robot.data.body_quat_w[0, right_hand_index].clone()
             # Retreat radially away from the object rather than towards the
             # hand's initial position.  The latter can put the pre-grasp on the
             # object side of a bad/noisy grasp and make the open hand collide
@@ -306,6 +368,8 @@ def main() -> None:
         capture_stride = 3
         root = Path(args.output)
         episode_index = 0
+        completed_episodes = 0
+        visual_counts = {"success": 0, "failed": 0}
         def next_writer():
             nonlocal episode_index
             while any((root / f"episode_{episode_index:06d}{suffix}").exists()
@@ -336,7 +400,7 @@ def main() -> None:
           initial_hand_z = float(robot.data.body_pos_w[0, right_hand_index, 2])
           stability_samples = []
           episode_start_step = 0
-          motion_phase = 0
+          motion_phase = 0 if plan["planning_valid"] else cycle_steps - 1
           waypoint_wait_steps = 0
           arm_command = torch.tensor(arm_default, device=env.device)
           for step in range(args.steps):
@@ -481,9 +545,24 @@ def main() -> None:
                     }
                 metrics["checks"] = checks
                 status = "success" if all(checks.values()) else "failed"
-                saved = writer.finish(status=status, metrics=metrics)
+                visual_limit = (
+                    args.keep_success_visuals if status == "success" else args.keep_failure_visuals
+                )
+                keep_visuals = visual_counts[status] < max(0, visual_limit)
+                saved = writer.finish(
+                    status=status, metrics=metrics, keep_visuals=keep_visuals
+                )
+                if keep_visuals:
+                    visual_counts[status] += 1
+                completed_episodes += 1
                 print(f"[sim-collect] {status}: {saved} {metrics}", file=sys.stderr, flush=True)
                 writer = None
+                if args.episodes is not None and completed_episodes >= args.episodes:
+                    print(
+                        f"[sim-collect] requested episodes completed: {completed_episodes}",
+                        file=sys.stderr, flush=True,
+                    )
+                    break
                 # Do not create a trailing .incomplete episode in finite runs.
                 enough_for_next = args.steps - (step + 1) >= cycle_steps
                 if enough_for_next or (manual_reset and step + 1 < args.steps):
@@ -503,6 +582,8 @@ def main() -> None:
                         file=sys.stderr, flush=True,
                     )
                     plan = plan_episode(current_episode_index)
+                    if not plan["planning_valid"]:
+                        motion_phase = cycle_steps - 1
                     hug_marker.visualize(plan["grasp_pos"].unsqueeze(0), plan["grasp_quat"].unsqueeze(0))
                     pregrasp_marker.visualize(
                         plan["pregrasp_pos"].unsqueeze(0), plan["grasp_quat"].unsqueeze(0)
