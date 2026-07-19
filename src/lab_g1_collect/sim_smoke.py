@@ -88,6 +88,10 @@ def main() -> None:
         help="物体XY网格相邻位置间距，默认0.02 m",
     )
     parser.add_argument(
+        "--object-grid-step-xy", type=float, nargs=2, default=None,
+        metavar=("DX", "DY"), help="分别指定物体网格X/Y间距，覆盖--object-grid-step-m",
+    )
+    parser.add_argument(
         "--nearby-ik-test", action="store_true",
         help="将圆柱固定在右手附近，并用初始腕位姿的小偏移验证手臂 IK（绕过 HUG）",
     )
@@ -102,10 +106,13 @@ def main() -> None:
             parser.error("--object-grid-xy requires --object-fixed-xyz X Y Z")
         grid_size = max(1, args.object_grid_xy)
         half = (grid_size - 1) / 2.0
-        step = max(0.0, args.object_grid_step_m)
+        if args.object_grid_step_xy is None:
+            step_x = step_y = max(0.0, args.object_grid_step_m)
+        else:
+            step_x, step_y = (max(0.0, value) for value in args.object_grid_step_xy)
         center = args.object_fixed_xyz
         object_grid = [
-            [center[0] + (ix - half) * step, center[1] + (iy - half) * step, center[2]]
+            [center[0] + (ix - half) * step_x, center[1] + (iy - half) * step_y, center[2]]
             for ix in range(grid_size) for iy in range(grid_size)
         ]
     reset_index = 0
@@ -475,6 +482,9 @@ def main() -> None:
                 "selected_hug_candidate": selected_hug_candidate,
                 "hug_candidate_stats": hug_candidate_stats,
                 "hug_sampling_stats": hug_sampling_stats,
+                "pregrasp_reached": False,
+                "grasp_reached": False,
+                "failure_category": None,
             }
 
         def target_for_phase(plan: dict, phase: int):
@@ -541,6 +551,16 @@ def main() -> None:
           episode_start_step = 0
           motion_phase = 0 if plan["planning_valid"] else cycle_steps - 1
           waypoint_wait_steps = 0
+          approach_recorded_phases = set()
+          approach_diagnostics = {
+              "sample_count": 0,
+              "max_target_tracking_error_m": 0.0,
+              "max_cross_track_error_m": 0.0,
+              "max_backward_progress": 0.0,
+              "first_tracking_error_over_0.04_alpha": None,
+              "final_progress": None,
+          }
+          previous_approach_progress = None
           arm_command = torch.tensor(arm_default, device=env.device)
           for step in range(args.steps):
             phase = motion_phase
@@ -660,6 +680,34 @@ def main() -> None:
             action = torch.tensor(expanded, device=env.device).unsqueeze(0)
             with contextlib.redirect_stdout(sink):
                 observation, *_ = env.step(action)
+            if pregrasp_end <= phase < grasp_end and phase not in approach_recorded_phases:
+                approach_recorded_phases.add(phase)
+                actual_after = robot.data.body_pos_w[0, right_hand_index]
+                line = plan["grasp_pos"] - plan["pregrasp_pos"]
+                line_length_sq = torch.clamp(torch.dot(line, line), min=1e-9)
+                progress = float(torch.dot(actual_after - plan["pregrasp_pos"], line) / line_length_sq)
+                clamped_progress = float(np.clip(progress, 0.0, 1.0))
+                closest = plan["pregrasp_pos"] + clamped_progress * line
+                cross_track = float(torch.linalg.vector_norm(actual_after - closest))
+                tracking_error = float(torch.linalg.vector_norm(actual_after - target_pos_w))
+                commanded_alpha = (phase - pregrasp_end) / float(grasp_end - pregrasp_end - 1)
+                approach_diagnostics["sample_count"] += 1
+                approach_diagnostics["max_target_tracking_error_m"] = max(
+                    approach_diagnostics["max_target_tracking_error_m"], tracking_error
+                )
+                approach_diagnostics["max_cross_track_error_m"] = max(
+                    approach_diagnostics["max_cross_track_error_m"], cross_track
+                )
+                if previous_approach_progress is not None:
+                    approach_diagnostics["max_backward_progress"] = max(
+                        approach_diagnostics["max_backward_progress"],
+                        previous_approach_progress - progress,
+                    )
+                previous_approach_progress = progress
+                approach_diagnostics["final_progress"] = progress
+                if (tracking_error > 0.04 and
+                        approach_diagnostics["first_tracking_error_over_0.04_alpha"] is None):
+                    approach_diagnostics["first_tracking_error_over_0.04_alpha"] = commanded_alpha
             if writer is not None and (phase % capture_stride == 0 or phase == cycle_steps - 1):
                 robot_pos = env.scene["robot"].data.joint_pos[0].cpu().numpy()
                 arm_state = np.array([robot_pos[joint_names.index(name)] for name in RIGHT_ARM_JOINTS])
@@ -714,6 +762,10 @@ def main() -> None:
                         "selected_hug_candidate": plan["selected_hug_candidate"],
                         "hug_candidate_stats": plan["hug_candidate_stats"],
                         "hug_sampling_stats": plan["hug_sampling_stats"],
+                        "pregrasp_reached": plan["pregrasp_reached"],
+                        "grasp_reached": plan["grasp_reached"],
+                        "failure_category": plan["failure_category"],
+                        "approach_diagnostics": approach_diagnostics,
                     }
                     checks = {
                         "planning_valid": bool(plan["planning_valid"]),
@@ -756,6 +808,16 @@ def main() -> None:
                     episode_start_step = step + 1
                     motion_phase = 0
                     waypoint_wait_steps = 0
+                    approach_recorded_phases.clear()
+                    approach_diagnostics = {
+                        "sample_count": 0,
+                        "max_target_tracking_error_m": 0.0,
+                        "max_cross_track_error_m": 0.0,
+                        "max_backward_progress": 0.0,
+                        "first_tracking_error_over_0.04_alpha": None,
+                        "final_progress": None,
+                    }
+                    previous_approach_progress = None
                     writer, current_episode_index = next_writer()
                     print(
                         f"[sim-collect] episode {current_episode_index:06d} planning with fresh RGB-D",
@@ -797,9 +859,24 @@ def main() -> None:
                     )
                     plan["planning_valid"] = False
                     plan["planning_failure"] = failure
+                    if gate[0] == "pre-grasp":
+                        plan["failure_category"] = "pregrasp_target_unreached"
+                    elif approach_diagnostics["max_cross_track_error_m"] > 0.04:
+                        plan["failure_category"] = "straight_approach_deviation_and_grasp_unreached"
+                    else:
+                        plan["failure_category"] = "grasp_target_unreached"
                     motion_phase = cycle_steps - 1
                     print(f"[sim-collect] {failure}", file=sys.stderr, flush=True)
             else:
+                if gate is not None and measured_error <= gate[1]:
+                    if gate[0] == "pre-grasp":
+                        plan["pregrasp_reached"] = True
+                    else:
+                        plan["grasp_reached"] = True
+                        if approach_diagnostics["max_cross_track_error_m"] > 0.04:
+                            plan["failure_category"] = "straight_approach_deviation_but_grasp_reached"
+                        else:
+                            plan["failure_category"] = "ik_path_completed"
                 if gate is not None and waypoint_wait_steps:
                     print(
                         f"[IK gate] leaving={gate[0]} error_m={measured_error:.4f} "
