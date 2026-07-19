@@ -216,6 +216,12 @@ python -m lab_g1_collect.sim_smoke --device cpu --headless --steps 7000 --episod
 4×4位置扫描和固定位置80候选实验见
 `docs/hug_sampling_position_sweep_2026-07-19.md`。
 
+大范围位置实验可用 `--object-grid-step-xy DX DY` 分别指定 X/Y 网格间距。IK 轨迹诊断
+会在 episode 元数据中保存 `pregrasp_reached`、`grasp_reached`、`failure_category` 和
+`approach_diagnostics`，从而区分 pre-grasp 目标未到达、直线接近偏离和 grasp 终点未到达。
+双臂之间11×11共121个位置的实验与原因分析见
+`docs/between_arms_121_position_sweep_2026-07-19.md`。
+
 GUI会持续检查7个右臂关节到Isaac软限位的最小余量。默认余量不超过0.08 rad时，
 对应关节/link中心会出现半径40 mm的红色警示球，终端同时打印
 `[joint-limit-warning]`、关节名、当前角度和余量；离开警戒区后红球自动隐藏。可用
