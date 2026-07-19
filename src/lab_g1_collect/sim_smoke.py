@@ -265,7 +265,11 @@ def main() -> None:
                         frame_correction=frame_correction,
                         seed=args.seed + index * 100 + candidate_offset + 10_000,
                     )
-                    feasible = bool(grasp_ik["reachable"] and pregrasp_ik["reachable"])
+                    feasible = bool(
+                        grasp_ik["reachable"] and pregrasp_ik["reachable"]
+                        and 0.10 <= distance <= 0.22
+                        and grasp_ik["joint_limit_margin_rad"] >= 0.05
+                    )
                     score = (
                         abs(distance - 0.14) * 10.0
                         + grasp_ik["position_error_m"] + pregrasp_ik["position_error_m"]
@@ -295,7 +299,7 @@ def main() -> None:
                 grasp_quat = selected["grasp_quat"]
                 hand_target = selected["hand"]
                 hug_distance = selected["distance"]
-                planning_valid = bool(selected["feasible"] and hug_distance <= 0.35)
+                planning_valid = bool(selected["feasible"])
                 planning_failure = None if planning_valid else "8个HUG候选均未通过G1右臂6D IK"
                 pregrasp_arm_target = selected["pregrasp_ik"]["joint_positions"]
                 grasp_arm_target = selected["grasp_ik"]["joint_positions"]
