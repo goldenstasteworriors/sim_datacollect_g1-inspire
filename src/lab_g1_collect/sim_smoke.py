@@ -302,6 +302,9 @@ def main() -> None:
                 raise RuntimeError(f"烧杯条件点不在 HUG 图像内: {(u_224, v_224)}")
             start_pos = robot.data.body_pos_w[0, right_hand_index].clone()
             start_quat = robot.data.body_quat_w[0, right_hand_index].clone()
+            hug_candidate_stats = []
+            hug_sampling_stats = None
+            selected_hug_candidate = None
             if args.nearby_ik_test:
                 # This target is only 67 mm from the reset wrist pose and keeps
                 # the exact reset orientation. It isolates arm IK from HUG and
@@ -355,21 +358,65 @@ def main() -> None:
                         "grasp_quat": candidate_quat, "hand": candidate_hand,
                         "distance": distance,
                     })
+                    hug_candidate_stats.append({
+                        "name": name,
+                        "wrist_xyz": candidate_pos.cpu().tolist(),
+                        "wrist_quat_wxyz": candidate_quat.cpu().tolist(),
+                        "object_distance_m": distance,
+                    })
                     print(
                         f"[HUG candidate] {name} distance={distance:.3f} "
                         f"in_distance_range={in_distance_range}",
                         file=sys.stderr, flush=True,
                     )
                 selected = min(evaluated, key=lambda item: item["score"])
+                selected_hug_candidate = selected["name"]
                 grasp_pos = selected["grasp_pos"]
                 grasp_quat = selected["grasp_quat"]
                 hand_target = selected["hand"]
                 hug_distance = selected["distance"]
                 planning_valid = True
                 planning_failure = None
+                candidate_positions = torch.stack([item["grasp_pos"] for item in evaluated])
+                candidate_quats = torch.stack([item["grasp_quat"] for item in evaluated])
+                pairwise_translation = torch.cdist(candidate_positions, candidate_positions)
+                pairwise_quat_dot = torch.clamp(
+                    torch.abs(candidate_quats @ candidate_quats.T), max=1.0
+                )
+                pairwise_rotation = 2.0 * torch.acos(pairwise_quat_dot)
+                upper = torch.triu_indices(
+                    len(evaluated), len(evaluated), offset=1, device=env.device
+                )
+                translation_values = pairwise_translation[upper[0], upper[1]]
+                rotation_values = pairwise_rotation[upper[0], upper[1]]
+                if len(evaluated) == 1:
+                    translation_values = torch.zeros(1, device=env.device)
+                    rotation_values = torch.zeros(1, device=env.device)
+                object_distances = torch.tensor(
+                    [item["distance"] for item in evaluated], device=env.device
+                )
+                hug_sampling_stats = {
+                    "candidate_count": len(evaluated),
+                    "object_distance_mean_m": float(object_distances.mean()),
+                    "object_distance_std_m": float(object_distances.std(unbiased=False)),
+                    "object_distance_min_m": float(object_distances.min()),
+                    "object_distance_max_m": float(object_distances.max()),
+                    "pairwise_translation_mean_m": float(translation_values.mean()),
+                    "pairwise_translation_max_m": float(translation_values.max()),
+                    "pairwise_rotation_mean_deg": float(torch.rad2deg(rotation_values).mean()),
+                    "pairwise_rotation_max_deg": float(torch.rad2deg(rotation_values).max()),
+                }
                 print(
                     f"[HUG candidate] selected={selected['name']} "
                     f"distance={selected['distance']:.3f}",
+                    file=sys.stderr, flush=True,
+                )
+                print(
+                    "[HUG sampling spread] "
+                    f"translation_mean_m={hug_sampling_stats['pairwise_translation_mean_m']:.3f} "
+                    f"translation_max_m={hug_sampling_stats['pairwise_translation_max_m']:.3f} "
+                    f"rotation_mean_deg={hug_sampling_stats['pairwise_rotation_mean_deg']:.1f} "
+                    f"rotation_max_deg={hug_sampling_stats['pairwise_rotation_max_deg']:.1f}",
                     file=sys.stderr, flush=True,
                 )
             else:
@@ -425,6 +472,9 @@ def main() -> None:
                 "uv_224": (u_224, v_224),
                 "planning_valid": planning_valid,
                 "planning_failure": planning_failure,
+                "selected_hug_candidate": selected_hug_candidate,
+                "hug_candidate_stats": hug_candidate_stats,
+                "hug_sampling_stats": hug_sampling_stats,
             }
 
         def target_for_phase(plan: dict, phase: int):
@@ -661,6 +711,9 @@ def main() -> None:
                         "grasp_target_xyz": plan["grasp_pos"].cpu().tolist(),
                         "pregrasp_target_xyz": plan["pregrasp_pos"].cpu().tolist(),
                         "planning_failure": plan["planning_failure"],
+                        "selected_hug_candidate": plan["selected_hug_candidate"],
+                        "hug_candidate_stats": plan["hug_candidate_stats"],
+                        "hug_sampling_stats": plan["hug_sampling_stats"],
                     }
                     checks = {
                         "planning_valid": bool(plan["planning_valid"]),

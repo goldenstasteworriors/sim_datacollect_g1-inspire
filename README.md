@@ -210,6 +210,12 @@ python -m lab_g1_collect.sim_smoke --device cpu --headless --steps 7000 --episod
 外推 pre-grasp 的采样波动大于20 mm物体平移的影响，不能把单次 tracking timeout
 解释为该物体位置在G1右臂工作空间中没有运动学解。
 
+每个 HUG episode 还会在 `metadata.json` 中保存 `hug_candidate_stats`、
+`hug_sampling_stats` 和 `selected_hug_candidate`。前者包含每个候选腕位姿及其到物体
+中心的距离；后者包含同批候选的距离分布、两两平移差和四元数最短角旋转差。新增的
+4×4位置扫描和固定位置80候选实验见
+`docs/hug_sampling_position_sweep_2026-07-19.md`。
+
 GUI会持续检查7个右臂关节到Isaac软限位的最小余量。默认余量不超过0.08 rad时，
 对应关节/link中心会出现半径40 mm的红色警示球，终端同时打印
 `[joint-limit-warning]`、关节名、当前角度和余量；离开警戒区后红球自动隐藏。可用
