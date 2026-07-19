@@ -149,6 +149,16 @@ pre-grasp/grasp 到点门控可能增加物理等待步数。
 `--hug-candidates` 和 `--hug-sampling-steps` 调节 HUG 推理。`--debug-ik` 会打印关键阶段的末端目标、
 位置误差和雅可比预测位移。
 
+已有 episode 可用下面的诊断工具区分目标轨迹跟踪误差与离线 Pinocchio/Isaac FK
+不一致。图中的红点只表示在线跟踪误差首次超过门限，不能在 FK 模型一致性验证通过前
+解释为该 Cartesian 点在物理上不可达：
+
+```bash
+PYTHONPATH="$PWD/src:$PYTHONPATH" conda run --no-capture-output -n unitree_sim_env \
+python tools/analyze_ik_episode.py outputs/ik_filtered_100/episode_000015.failed \
+  --output outputs/ik_diagnostics/episode_000015
+```
+
 成功要求最后 30 个物理步同时满足：物体相对初始高度始终不低于 3 cm、物体与
 最近右手指节距离始终不超过 10 cm、物体线速度不超过 0.15 m/s、角速度不超过
 1.0 rad/s；任意条件不满足即判失败。
