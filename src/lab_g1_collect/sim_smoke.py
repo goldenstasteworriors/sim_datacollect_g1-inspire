@@ -49,6 +49,10 @@ def main() -> None:
     parser.add_argument("--hug-candidates", type=int, default=8)
     parser.add_argument("--debug-ik", action="store_true")
     parser.add_argument(
+        "--arm-ik", choices=("xr_teleoperate", "dls"), default="xr_teleoperate",
+        help="手臂 IK：宇树 xr_teleoperate 官方 G1_29 CasADi IK，或旧的本地 DLS 对照",
+    )
+    parser.add_argument(
         "--ik-rotation-weight", type=float, default=0.25,
         help="pre-grasp/grasp 阶段 DLS 姿态误差权重；0 用于仅验证位置可达性",
     )
@@ -85,7 +89,7 @@ def main() -> None:
 
     # Match Unitree's official launcher order so Pinocchio resolves its bundled
     # Assimp symbols before Isaac Kit loads another Assimp build.
-    import pinocchio  # noqa: F401
+    import pinocchio as pin
 
     from isaaclab.app import AppLauncher
 
@@ -176,6 +180,8 @@ def main() -> None:
         lift_end = 550
         cycle_steps = 600
         arm_joint_ids = [joint_names.index(name) for name in RIGHT_ARM_JOINTS]
+        left_arm_joint_names = [name.replace("right_", "left_", 1) for name in RIGHT_ARM_JOINTS]
+        left_arm_joint_ids = [joint_names.index(name) for name in left_arm_joint_names]
         right_hand_index = env.scene["robot"].body_names.index("right_hand_base_link")
         right_finger_indices = [
             index for index, name in enumerate(env.scene["robot"].body_names) if name.startswith("R_")
@@ -191,6 +197,30 @@ def main() -> None:
         pregrasp_marker = VisualizationMarkers(
             pregrasp_marker_cfg.replace(prim_path="/Visuals/HUGPregraspPose")
         )
+
+        xr_arm_ik = None
+        xr_right_frame_correction = None
+        if args.arm_ik == "xr_teleoperate":
+            from .xr_teleoperate_ik import XrTeleoperateArmIK
+            xr_arm_ik = XrTeleoperateArmIK(project)
+            dual_q = np.r_[
+                robot.data.joint_pos[0, left_arm_joint_ids].cpu().numpy(),
+                robot.data.joint_pos[0, arm_joint_ids].cpu().numpy(),
+            ]
+            model_right = np.asarray(xr_arm_ik.initialize(dual_q)["right"])
+            root_pose = robot.data.root_pose_w
+            actual_right = robot.data.body_pose_w[:, right_hand_index]
+            actual_pos_b, actual_quat_b = subtract_frame_transforms(
+                root_pose[:, :3], root_pose[:, 3:7], actual_right[:, :3], actual_right[:, 3:7]
+            )
+            actual_right_matrix = np.eye(4)
+            actual_right_matrix[:3, :3] = matrix_from_quat(actual_quat_b)[0].cpu().numpy()
+            actual_right_matrix[:3, 3] = actual_pos_b[0].cpu().numpy()
+            xr_right_frame_correction = np.linalg.inv(model_right) @ actual_right_matrix
+            print(
+                "[arm-ik] using xr_teleoperate G1_29_ArmIK (CasADi/IPOPT)",
+                file=sys.stderr, flush=True,
+            )
 
         def plan_episode(index: int):
             front = env.scene["front_camera"].data
@@ -393,56 +423,62 @@ def main() -> None:
             ee_pos_b, ee_quat_b = subtract_frame_transforms(
                 root_pose[:, :3], root_pose[:, 3:7], ee_pose_w[:, :3], ee_pose_w[:, 3:7],
             )
-            jacobian = robot.root_physx_view.get_jacobians()[:, jacobian_index, :, arm_joint_ids]
-            world_to_base = matrix_from_quat(quat_inv(root_pose[:, 3:7]))
-            jacobian[:, :3, :] = torch.bmm(world_to_base, jacobian[:, :3, :])
-            jacobian[:, 3:, :] = torch.bmm(world_to_base, jacobian[:, 3:, :])
             arm_current = robot.data.joint_pos[:, arm_joint_ids]
             pos_error, rot_error = compute_pose_error(
                 ee_pos_b, ee_quat_b, target_pos_b, target_quat_b, rot_error_type="axis_angle"
             )
-            damping = 0.05
-            if phase < close_end:
-                rotation_weight = float(np.clip(args.ik_rotation_weight, 0.0, 1.0))
-                task_weights = torch.tensor(
-                    [1.0, 1.0, 1.0, rotation_weight, rotation_weight, rotation_weight],
-                    device=env.device,
-                )
-                task_jacobian = jacobian * task_weights.view(1, 6, 1)
-                task_error = torch.cat((pos_error, rot_error), dim=-1) * task_weights
+            predicted_delta = None
+            if xr_arm_ik is not None:
+                dual_q = np.r_[
+                    robot.data.joint_pos[0, left_arm_joint_ids].cpu().numpy(),
+                    arm_current[0].cpu().numpy(),
+                ]
+                dual_dq = np.r_[
+                    robot.data.joint_vel[0, left_arm_joint_ids].cpu().numpy(),
+                    robot.data.joint_vel[0, arm_joint_ids].cpu().numpy(),
+                ]
+                actual_target = np.eye(4)
+                actual_target[:3, :3] = matrix_from_quat(target_quat_b)[0].cpu().numpy()
+                actual_target[:3, 3] = target_pos_b[0].cpu().numpy()
+                right_target = actual_target @ np.linalg.inv(xr_right_frame_correction)
+                solution_q = xr_arm_ik.solve(right_target, dual_q, dual_dq)
+                arm_desired = torch.tensor(solution_q[-7:], device=env.device, dtype=arm_current.dtype)
             else:
-                # Once contact is established, orientation is secondary. Solve an
-                # explicit 3-D position task instead of padding a rank-deficient
-                # 6-D task with three zero-weight rotation rows.
-                task_jacobian = jacobian[:, :3, :]
-                task_error = pos_error
-            task_dim = task_jacobian.shape[1]
-            normal = torch.bmm(task_jacobian, task_jacobian.transpose(1, 2))
-            normal += (damping * damping) * torch.eye(task_dim, device=env.device).unsqueeze(0)
-            delta_joint = torch.bmm(
-                task_jacobian.transpose(1, 2),
-                torch.linalg.solve(normal, task_error.unsqueeze(-1)),
-            ).squeeze(-1)
-            # Preserve the DLS direction when limiting velocity. Independent
-            # per-joint clipping distorts the Cartesian direction near singularities.
-            # The final Cartesian approach is deliberately slower than free-
-            # space motion so the implicit actuators track the straight target
-            # without overshooting and correcting backwards near the object.
-            max_joint_step_rad = float(np.clip(args.ik_max_joint_step, 0.005, 0.15))
-            if pregrasp_end <= phase < grasp_end:
-                max_joint_step_rad *= 0.5
-            scale = torch.clamp(
-                max_joint_step_rad / torch.clamp(delta_joint[0].abs().max(), min=1e-9), max=1.0
-            )
-            # A pure q_current + delta_q command is too soft for this implicit
-            # position actuator, while full accumulation repeatedly integrates
-            # tracking error and overshoots. Blend a bounded fraction of the
-            # DLS correction into the previous command as actuator feed-forward.
-            integration = float(np.clip(args.ik_command_integration, 0.0, 1.0))
-            arm_desired = (
-                arm_current[0] + delta_joint[0] * scale
-                + integration * (arm_command - arm_current[0])
-            )
+                jacobian = robot.root_physx_view.get_jacobians()[:, jacobian_index, :, arm_joint_ids]
+                world_to_base = matrix_from_quat(quat_inv(root_pose[:, 3:7]))
+                jacobian[:, :3, :] = torch.bmm(world_to_base, jacobian[:, :3, :])
+                jacobian[:, 3:, :] = torch.bmm(world_to_base, jacobian[:, 3:, :])
+                damping = 0.05
+                if phase < close_end:
+                    rotation_weight = float(np.clip(args.ik_rotation_weight, 0.0, 1.0))
+                    task_weights = torch.tensor(
+                        [1.0, 1.0, 1.0, rotation_weight, rotation_weight, rotation_weight],
+                        device=env.device,
+                    )
+                    task_jacobian = jacobian * task_weights.view(1, 6, 1)
+                    task_error = torch.cat((pos_error, rot_error), dim=-1) * task_weights
+                else:
+                    task_jacobian = jacobian[:, :3, :]
+                    task_error = pos_error
+                task_dim = task_jacobian.shape[1]
+                normal = torch.bmm(task_jacobian, task_jacobian.transpose(1, 2))
+                normal += (damping * damping) * torch.eye(task_dim, device=env.device).unsqueeze(0)
+                delta_joint = torch.bmm(
+                    task_jacobian.transpose(1, 2),
+                    torch.linalg.solve(normal, task_error.unsqueeze(-1)),
+                ).squeeze(-1)
+                max_joint_step_rad = float(np.clip(args.ik_max_joint_step, 0.005, 0.15))
+                if pregrasp_end <= phase < grasp_end:
+                    max_joint_step_rad *= 0.5
+                scale = torch.clamp(
+                    max_joint_step_rad / torch.clamp(delta_joint[0].abs().max(), min=1e-9), max=1.0
+                )
+                integration = float(np.clip(args.ik_command_integration, 0.0, 1.0))
+                arm_desired = (
+                    arm_current[0] + delta_joint[0] * scale
+                    + integration * (arm_command - arm_current[0])
+                )
+                predicted_delta = torch.mv(task_jacobian[0], arm_desired - arm_current[0])
             command_lead = float(np.clip(args.ik_max_command_lead, 0.01, 0.15))
             if pregrasp_end <= phase < grasp_end:
                 command_lead *= 2.0 / 3.0
@@ -456,13 +492,17 @@ def main() -> None:
                 0, pregrasp_end - 1, grasp_end - 1,
                 close_end - 1, lift_end - 1, cycle_steps - 1,
             ):
-                predicted_delta = torch.mv(task_jacobian[0], arm_desired - arm_current[0])
+                joint_margins = torch.minimum(
+                    arm_current[0] - limits[:, 0], limits[:, 1] - arm_current[0]
+                )
+                minimum_margin_index = int(torch.argmin(joint_margins))
                 print(
                     f"[IK debug] phase={phase} ee={ee_pose_w[0, :3].cpu().tolist()} "
                     f"target={target_pos_w.cpu().tolist()} error_b={pos_error[0].cpu().tolist()} "
                     f"rotation_error_rad={float(torch.linalg.vector_norm(rot_error[0])):.4f} "
-                    f"predicted_delta={predicted_delta[:3].cpu().tolist()} "
-                    f"joint_limit_margin_rad={float(torch.minimum(arm_current[0] - limits[:, 0], limits[:, 1] - arm_current[0]).min()):.4f}",
+                    f"predicted_delta={predicted_delta[:3].cpu().tolist() if predicted_delta is not None else 'xr_teleoperate'} "
+                    f"joint_limit_margin_rad={float(joint_margins[minimum_margin_index]):.4f} "
+                    f"limiting_joint={RIGHT_ARM_JOINTS[minimum_margin_index]}",
                     file=sys.stderr, flush=True,
                 )
             compact = np.r_[arm_desired.cpu().numpy(), hand_command].astype(np.float32)
@@ -618,6 +658,8 @@ def main() -> None:
         }
         # Isaac Kit may terminate before conda-run flushes captured stdout; stderr is immediate.
         print(json.dumps(report, ensure_ascii=False, indent=2), file=sys.stderr, flush=True)
+        if xr_arm_ik is not None:
+            xr_arm_ik.close()
         env.close()
     except BaseException:
         traceback.print_exc(file=sys.stderr)

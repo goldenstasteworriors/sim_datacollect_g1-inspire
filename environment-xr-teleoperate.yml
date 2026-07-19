@@ -1,0 +1,11 @@
+name: tv
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pinocchio=3.1.0
+  - numpy=1.26.4
+  - pip
+  - pip:
+      - -r third_party/xr_teleoperate/requirements.txt
+      - logging-mp==0.1.5

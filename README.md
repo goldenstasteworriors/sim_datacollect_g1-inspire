@@ -151,8 +151,10 @@ pre-grasp/grasp 到点门控可能增加物理等待步数。
 
 当前自动采集不再使用 Pinocchio/SciPy 离线 IK 过滤 HUG 候选，也不再把离线关节解
 混入执行命令。8 个候选只按 Inspire base 到物体中心的几何距离选择；实际手臂控制
-是本项目在 Isaac PhysX Jacobian 上实现的阻尼最小二乘（DLS）在线 IK，代码位于
-`src/lab_g1_collect/sim_smoke.py`。它不是 IsaacLab 官方 `DifferentialIKController`。
+默认直接调用宇树 `xr_teleoperate` 的 `G1_29_ArmIK`（Pinocchio + CasADi/IPOPT）；
+`--arm-ik dls` 才会切回本项目在 Isaac PhysX Jacobian 上实现的旧阻尼最小二乘对照。
+桥接代码位于 `src/lab_g1_collect/xr_teleoperate_ik.py`，使用常驻 `tv` conda 子进程，
+避免把官方 Pinocchio 3.1/CasADi 依赖混入 IsaacLab 环境。
 在线到点门控仍会记录实际末端未能在规定时间进入 40 mm 容差的执行失败，但不再把它
 表述为离线模型证明的运动学不可达。
 
@@ -161,6 +163,11 @@ pre-grasp/grasp 到点门控可能增加物理等待步数。
 但在后续 100 mm 直线 approach 末端仍剩余 97 mm，且关节限位余量约 0.85 rad。
 这表明当前瓶颈确实在自写在线 DLS/位置执行链路，而不是关节到达限位；后续超时日志
 使用 `tracking timeout`，不再写成未经证明的 `unreachable`。
+
+`xr_teleoperate` 按官方教程使用 Python 3.10、Pinocchio 3.1.0、NumPy 1.26.4，并安装
+上游 `requirements.txt`。首次圆柱对照的 pre-grasp 最终误差由旧DLS的约97 mm降至
+54.8 mm，但 Isaac 实测最小软限位余量为 -0.0072 rad，说明官方 URDF 优化边界与当前
+Isaac USD 软限位并不完全相同；当前仍按 Isaac 限位裁剪命令，不能用越界解强行执行。
 
 已有 episode 可用下面的诊断工具区分目标轨迹跟踪误差与离线 Pinocchio/Isaac FK
 不一致。图中的红点只表示在线跟踪误差首次超过门限，不能在 FK 模型一致性验证通过前
