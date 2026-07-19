@@ -108,7 +108,8 @@ grasp 并闭合
 
 HUG 流程的 pre-grasp 默认沿“物体中心→grasp腕位置”方向向外偏移30 mm，可用
 `--pregrasp-offset-m` 调整。2026-07-19之前的实验使用固定100 mm，历史报告中的结果
-仍按当时配置解释。
+仍按当时配置解释。固定 `(-0.21, 0.28, 0.86) m` 的20次实验及20次100 mm对照见
+`docs/pregrasp_offset_3cm_experiment_2026-07-19.md`。
 
 ## Isaac Sim 场景
 
