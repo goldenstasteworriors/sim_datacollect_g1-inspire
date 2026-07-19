@@ -529,7 +529,7 @@ def main() -> None:
             action = torch.tensor(expanded, device=env.device).unsqueeze(0)
             with contextlib.redirect_stdout(sink):
                 observation, *_ = env.step(action)
-            if writer is not None and phase % capture_stride == 0:
+            if writer is not None and (phase % capture_stride == 0 or phase == cycle_steps - 1):
                 robot_pos = env.scene["robot"].data.joint_pos[0].cpu().numpy()
                 arm_state = np.array([robot_pos[joint_names.index(name)] for name in RIGHT_ARM_JOINTS])
                 front = env.scene["front_camera"].data.output
