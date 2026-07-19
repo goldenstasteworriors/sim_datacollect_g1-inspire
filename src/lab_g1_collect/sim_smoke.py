@@ -72,6 +72,10 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--object-randomization-m", type=float, default=0.04)
     parser.add_argument(
+        "--object-fixed-xyz", type=float, nargs=3, default=None, metavar=("X", "Y", "Z"),
+        help="用世界坐标固定物体位置并关闭XY随机化，例如 -0.06 0.38 0.86",
+    )
+    parser.add_argument(
         "--nearby-ik-test", action="store_true",
         help="将圆柱固定在右手附近，并用初始腕位姿的小偏移验证手臂 IK（绕过 HUG）",
     )
@@ -126,7 +130,11 @@ def main() -> None:
             obj = env.scene["object"]
             default_state = obj.data.default_root_state.clone()
             default_state[:, :3] += env.scene.env_origins
-            if args.nearby_ik_test:
+            if args.object_fixed_xyz is not None:
+                default_state[:, :3] = torch.tensor(
+                    args.object_fixed_xyz, device=env.device
+                )
+            elif args.nearby_ik_test:
                 default_state[:, :3] = torch.tensor(
                     [-0.040, 0.380, 0.860], device=env.device
                 )

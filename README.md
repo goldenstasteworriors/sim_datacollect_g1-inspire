@@ -183,6 +183,14 @@ python -m lab_g1_collect.sim_smoke --device cpu --headless --steps 900 --episode
   --keep-failure-visuals 1 --output outputs/xr_ik_nearby_visual
 ```
 
+`--object-fixed-xyz X Y Z` 可在完整 HUG 流程中固定物体而不启用近距离测试捷径。将圆柱
+从上述位置向世界 X 负方向移动20 mm，即固定在 `(-0.060, 0.380, 0.860) m` 后，完整
+HUG 生成的 grasp 腕位姿为约 `(-0.050, 0.299, 0.983) m`，径向外推100 mm得到的
+pre-grasp 高度达到约1.067 m。XR IK 在 pre-grasp 最终仍差70.2 mm，并由
+`right_wrist_yaw_joint` 的 Isaac 软限位截断（余量约 -0.0075 rad），因此尚未进入闭手
+阶段。这说明圆柱左移20 mm并未解决问题，主要矛盾仍是HUG旋转加固定100 mm径向
+pre-grasp与Isaac腕部限位的组合，而不是圆柱原位置本身。
+
 已有 episode 可用下面的诊断工具区分目标轨迹跟踪误差与离线 Pinocchio/Isaac FK
 不一致。图中的红点只表示在线跟踪误差首次超过门限，不能在 FK 模型一致性验证通过前
 解释为该 Cartesian 点在物理上不可达：
