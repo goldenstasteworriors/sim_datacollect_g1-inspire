@@ -211,7 +211,7 @@ def main() -> None:
             start_pos = robot.data.body_pos_w[0, right_hand_index].clone()
             start_quat = robot.data.body_quat_w[0, right_hand_index].clone()
             if args.use_hug and args.auto_collect:
-                from .arm_ik import solve_right_arm_ik
+                from .arm_ik import right_arm_frame_correction, solve_right_arm_ik
                 from .hug_bridge import run_hug_capture
                 hug_candidates = run_hug_capture(
                     project=project, episode_index=index,
@@ -225,6 +225,15 @@ def main() -> None:
                 )
                 root_pose = robot.data.root_pose_w
                 current_arm = robot.data.joint_pos[0, arm_joint_ids].cpu().numpy()
+                current_ee = robot.data.body_pose_w[:, right_hand_index]
+                current_pos_b, current_quat_b = subtract_frame_transforms(
+                    root_pose[:, :3], root_pose[:, 3:7],
+                    current_ee[:, :3], current_ee[:, 3:7],
+                )
+                frame_correction = right_arm_frame_correction(
+                    current_arm, current_pos_b[0].cpu().numpy(),
+                    matrix_from_quat(current_quat_b)[0].cpu().numpy(),
+                )
                 evaluated = []
                 for candidate_offset, (name, wrist_camera, candidate_hand) in enumerate(hug_candidates):
                     wrist_camera_t = torch.tensor(wrist_camera, device=env.device)
@@ -247,11 +256,13 @@ def main() -> None:
                     grasp_ik = solve_right_arm_ik(
                         grasp_pos_b[0].cpu().numpy(),
                         matrix_from_quat(grasp_quat_b)[0].cpu().numpy(), current_arm,
+                        frame_correction=frame_correction,
                         seed=args.seed + index * 100 + candidate_offset,
                     )
                     pregrasp_ik = solve_right_arm_ik(
                         pre_pos_b[0].cpu().numpy(),
                         matrix_from_quat(pre_quat_b)[0].cpu().numpy(), current_arm,
+                        frame_correction=frame_correction,
                         seed=args.seed + index * 100 + candidate_offset + 10_000,
                     )
                     feasible = bool(grasp_ik["reachable"] and pregrasp_ik["reachable"])

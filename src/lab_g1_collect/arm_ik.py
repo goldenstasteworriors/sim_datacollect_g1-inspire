@@ -30,6 +30,7 @@ def solve_right_arm_ik(
     target_position_base: np.ndarray,
     target_rotation_base: np.ndarray,
     current_arm: np.ndarray,
+    frame_correction: np.ndarray | None = None,
     *,
     seed: int = 42,
     starts: int = 6,
@@ -38,8 +39,15 @@ def solve_right_arm_ik(
 ) -> dict:
     """Solve bounded 6D IK and return feasibility plus residuals and q solution."""
     pin, model, data, q_indices, lower, upper, frame_id = _g1_model()
-    target_position = np.asarray(target_position_base, dtype=np.float64).reshape(3)
-    target_rotation = np.asarray(target_rotation_base, dtype=np.float64).reshape(3, 3)
+    target_pose = pin.SE3(
+        np.asarray(target_rotation_base, dtype=np.float64).reshape(3, 3),
+        np.asarray(target_position_base, dtype=np.float64).reshape(3),
+    )
+    if frame_correction is not None:
+        correction = np.asarray(frame_correction, dtype=np.float64).reshape(4, 4)
+        target_pose = target_pose * pin.SE3(correction[:3, :3], correction[:3, 3]).inverse()
+    target_position = target_pose.translation
+    target_rotation = target_pose.rotation
     current = np.clip(np.asarray(current_arm, dtype=np.float64).reshape(7), lower, upper)
     q_full = pin.neutral(model)
 
@@ -85,3 +93,25 @@ def solve_right_arm_ik(
         "joint_limit_margin_rad": float(np.min(np.minimum(best[4] - lower, upper - best[4]))),
         "joint_positions": best[4].astype(np.float32),
     }
+
+
+def right_arm_frame_correction(
+    current_arm: np.ndarray,
+    actual_position_base: np.ndarray,
+    actual_rotation_base: np.ndarray,
+) -> np.ndarray:
+    """Return C in T_actual_hand = T_urdf_palm @ C at the current q."""
+    pin, model, data, q_indices, _lower, _upper, frame_id = _g1_model()
+    q_full = pin.neutral(model)
+    q_full[q_indices] = np.asarray(current_arm, dtype=np.float64).reshape(7)
+    pin.forwardKinematics(model, data, q_full)
+    pin.updateFramePlacements(model, data)
+    actual = pin.SE3(
+        np.asarray(actual_rotation_base, dtype=np.float64).reshape(3, 3),
+        np.asarray(actual_position_base, dtype=np.float64).reshape(3),
+    )
+    correction = data.oMf[frame_id].inverse() * actual
+    matrix = np.eye(4, dtype=np.float64)
+    matrix[:3, :3] = correction.rotation
+    matrix[:3, 3] = correction.translation
+    return matrix
