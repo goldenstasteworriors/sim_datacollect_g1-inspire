@@ -82,5 +82,6 @@ def solve_right_arm_ik(
         "position_error_m": best[1],
         "rotation_error_rad": best[2],
         "joint_motion_rad": best[3],
+        "joint_limit_margin_rad": float(np.min(np.minimum(best[4] - lower, upper - best[4]))),
         "joint_positions": best[4].astype(np.float32),
     }

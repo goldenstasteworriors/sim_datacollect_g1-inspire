@@ -260,6 +260,7 @@ def main() -> None:
                         + grasp_ik["position_error_m"] + pregrasp_ik["position_error_m"]
                         + 0.05 * (grasp_ik["rotation_error_rad"] + pregrasp_ik["rotation_error_rad"])
                         + 0.01 * grasp_ik["joint_motion_rad"]
+                        + 0.002 / max(grasp_ik["joint_limit_margin_rad"], 1e-3)
                         + (0.0 if feasible else 100.0)
                     )
                     evaluated.append({
@@ -273,7 +274,9 @@ def main() -> None:
                         f"pre=({pregrasp_ik['position_error_m']:.3f}m,"
                         f"{pregrasp_ik['rotation_error_rad']:.3f}rad) "
                         f"grasp=({grasp_ik['position_error_m']:.3f}m,"
-                        f"{grasp_ik['rotation_error_rad']:.3f}rad)",
+                        f"{grasp_ik['rotation_error_rad']:.3f}rad) "
+                        f"motion={grasp_ik['joint_motion_rad']:.2f}rad "
+                        f"margin={grasp_ik['joint_limit_margin_rad']:.2f}rad",
                         file=sys.stderr, flush=True,
                     )
                 selected = min(evaluated, key=lambda item: item["score"])
@@ -283,6 +286,8 @@ def main() -> None:
                 hug_distance = selected["distance"]
                 planning_valid = bool(selected["feasible"] and hug_distance <= 0.35)
                 planning_failure = None if planning_valid else "8个HUG候选均未通过G1右臂6D IK"
+                pregrasp_arm_target = selected["pregrasp_ik"]["joint_positions"]
+                grasp_arm_target = selected["grasp_ik"]["joint_positions"]
                 print(
                     f"[IK candidate] selected={selected['name']} feasible={selected['feasible']}",
                     file=sys.stderr, flush=True,
@@ -300,6 +305,8 @@ def main() -> None:
                 grasp_quat = robot.data.body_quat_w[0, right_hand_index].clone()
                 planning_valid = True
                 planning_failure = None
+                pregrasp_arm_target = arm_default.copy()
+                grasp_arm_target = arm_default.copy()
             # Retreat radially away from the object rather than towards the
             # hand's initial position.  The latter can put the pre-grasp on the
             # object side of a bad/noisy grasp and make the open hand collide
@@ -337,6 +344,8 @@ def main() -> None:
                 "uv_224": (u_224, v_224),
                 "planning_valid": planning_valid,
                 "planning_failure": planning_failure,
+                "pregrasp_arm_target": np.asarray(pregrasp_arm_target, dtype=np.float32),
+                "grasp_arm_target": np.asarray(grasp_arm_target, dtype=np.float32),
             }
 
         def target_for_phase(plan: dict, phase: int):
@@ -459,9 +468,26 @@ def main() -> None:
             # tracking error and overshoots. Blend a bounded fraction of the
             # DLS correction into the previous command as actuator feed-forward.
             integration = float(np.clip(args.ik_command_integration, 0.0, 1.0))
+            if phase < pregrasp_end:
+                posture_alpha = phase / float(pregrasp_end - 1)
+                posture_target = torch.lerp(
+                    torch.tensor(arm_default, device=env.device),
+                    torch.tensor(plan["pregrasp_arm_target"], device=env.device),
+                    posture_alpha,
+                )
+            elif phase < grasp_end:
+                posture_alpha = (phase - pregrasp_end) / float(grasp_end - pregrasp_end - 1)
+                posture_target = torch.lerp(
+                    torch.tensor(plan["pregrasp_arm_target"], device=env.device),
+                    torch.tensor(plan["grasp_arm_target"], device=env.device),
+                    posture_alpha,
+                )
+            else:
+                posture_target = torch.tensor(plan["grasp_arm_target"], device=env.device)
             arm_desired = (
                 arm_current[0] + delta_joint[0] * scale
                 + integration * (arm_command - arm_current[0])
+                + 0.05 * (posture_target - arm_current[0])
             )
             command_lead = float(np.clip(args.ik_max_command_lead, 0.01, 0.15))
             if pregrasp_end <= phase < grasp_end:
