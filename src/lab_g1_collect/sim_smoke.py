@@ -636,9 +636,9 @@ def main() -> None:
             ))
             gate = None
             if phase == pregrasp_end - 1:
-                gate = ("pre-grasp", 0.02, 100)
+                gate = ("pre-grasp", 0.04, 100)
             elif phase == grasp_end - 1:
-                gate = ("grasp", 0.015, 75)
+                gate = ("grasp", 0.04, 100)
             if gate is not None and measured_error > gate[1]:
                 if waypoint_wait_steps < gate[2]:
                     waypoint_wait_steps += 1
