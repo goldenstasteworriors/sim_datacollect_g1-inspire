@@ -47,6 +47,10 @@ def main() -> None:
     parser.add_argument("--hand-closure-scale", type=float, default=1.0)
     parser.add_argument("--hug-sampling-steps", type=int, default=5)
     parser.add_argument("--hug-candidates", type=int, default=8)
+    parser.add_argument(
+        "--pregrasp-offset-m", type=float, default=0.03,
+        help="沿物体中心到HUG grasp腕位置方向向外生成pre-grasp的距离，默认0.03 m",
+    )
     parser.add_argument("--debug-ik", action="store_true")
     parser.add_argument(
         "--arm-ik", choices=("xr_teleoperate", "dls"), default="xr_teleoperate",
@@ -352,7 +356,7 @@ def main() -> None:
                     direction = candidate_pos - object_center
                     distance = float(torch.linalg.vector_norm(direction))
                     direction = direction / torch.clamp(torch.linalg.vector_norm(direction), min=1e-6)
-                    candidate_pregrasp = candidate_pos + 0.10 * direction
+                    candidate_pregrasp = candidate_pos + max(0.0, args.pregrasp_offset_m) * direction
 
                     in_distance_range = 0.10 <= distance <= 0.22
                     # Do not infer Isaac reachability from the separate Pinocchio
@@ -454,7 +458,7 @@ def main() -> None:
                     retreat_direction = start_pos - object_center
                     retreat_norm = torch.linalg.vector_norm(retreat_direction)
                 retreat_direction = retreat_direction / torch.clamp(retreat_norm, min=1e-6)
-                pregrasp_pos = grasp_pos + 0.10 * retreat_direction
+                pregrasp_pos = grasp_pos + max(0.0, args.pregrasp_offset_m) * retreat_direction
             lift_pos = grasp_pos + torch.tensor([0.0, 0.0, 0.12], device=env.device)
             within_coarse_workspace = hug_distance <= 0.35 if args.use_hug and args.auto_collect else True
             print(
@@ -758,6 +762,7 @@ def main() -> None:
                         "object_initial_xyz": initial_object_xyz,
                         "grasp_target_xyz": plan["grasp_pos"].cpu().tolist(),
                         "pregrasp_target_xyz": plan["pregrasp_pos"].cpu().tolist(),
+                        "pregrasp_offset_m": max(0.0, args.pregrasp_offset_m),
                         "planning_failure": plan["planning_failure"],
                         "selected_hug_candidate": plan["selected_hug_candidate"],
                         "hug_candidate_stats": plan["hug_candidate_stats"],
