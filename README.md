@@ -191,6 +191,12 @@ pre-grasp 高度达到约1.067 m。XR IK 在 pre-grasp 最终仍差70.2 mm，并
 阶段。这说明圆柱左移20 mm并未解决问题，主要矛盾仍是HUG旋转加固定100 mm径向
 pre-grasp与Isaac腕部限位的组合，而不是圆柱原位置本身。
 
+GUI会持续检查7个右臂关节到Isaac软限位的最小余量。默认余量不超过0.08 rad时，
+对应关节/link中心会出现半径40 mm的红色警示球，终端同时打印
+`[joint-limit-warning]`、关节名、当前角度和余量；离开警戒区后红球自动隐藏。可用
+`--joint-limit-warning-rad` 调整阈值。红球表示Isaac实际关节状态接近限位，不是HUG
+坐标轴的一部分。
+
 已有 episode 可用下面的诊断工具区分目标轨迹跟踪误差与离线 Pinocchio/Isaac FK
 不一致。图中的红点只表示在线跟踪误差首次超过门限，不能在 FK 模型一致性验证通过前
 解释为该 Cartesian 点在物理上不可达：

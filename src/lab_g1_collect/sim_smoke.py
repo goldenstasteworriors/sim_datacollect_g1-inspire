@@ -68,6 +68,10 @@ def main() -> None:
         "--ik-max-command-lead", type=float, default=0.15,
         help="位置命令相对实测关节的最大领先弧度，用于抑制累积超调",
     )
+    parser.add_argument(
+        "--joint-limit-warning-rad", type=float, default=0.08,
+        help="GUI中将接近Isaac软限位的右臂关节用红球标出的余量阈值",
+    )
     parser.add_argument("--output", default="outputs/gui_collect")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--object-randomization-m", type=float, default=0.04)
@@ -179,7 +183,7 @@ def main() -> None:
                 xyz = robot.data.body_pos_w[0, body_index].cpu().tolist()
                 print(f"[sim-smoke] body {body_name} xyz {xyz}", file=sys.stderr, flush=True)
         from isaaclab.markers import VisualizationMarkers
-        from isaaclab.markers.config import FRAME_MARKER_CFG
+        from isaaclab.markers.config import FRAME_MARKER_CFG, SPHERE_MARKER_CFG
         from isaaclab.utils.math import (
             compute_pose_error, matrix_from_quat, quat_from_matrix, quat_inv,
             quat_slerp, subtract_frame_transforms,
@@ -214,6 +218,17 @@ def main() -> None:
         pregrasp_marker = VisualizationMarkers(
             pregrasp_marker_cfg.replace(prim_path="/Visuals/HUGPregraspPose")
         )
+        limit_marker_cfg = SPHERE_MARKER_CFG.copy()
+        limit_marker_cfg.markers["sphere"].radius = 0.04
+        limit_marker = VisualizationMarkers(
+            limit_marker_cfg.replace(prim_path="/Visuals/RightArmJointLimitWarning")
+        )
+        hidden_limit_marker_pos = torch.tensor([[0.0, 0.0, -10.0]], device=env.device)
+        limit_marker.visualize(hidden_limit_marker_pos)
+        arm_joint_body_ids = [
+            robot.body_names.index(name.replace("_joint", "_link")) for name in RIGHT_ARM_JOINTS
+        ]
+        last_limit_warning_joint = None
 
         xr_arm_ik = None
         xr_right_frame_correction = None
@@ -526,15 +541,34 @@ def main() -> None:
             )
             limits = robot.data.soft_joint_pos_limits[0, arm_joint_ids]
             arm_desired = torch.clamp(arm_desired, limits[:, 0], limits[:, 1])
+            joint_margins = torch.minimum(
+                arm_current[0] - limits[:, 0], limits[:, 1] - arm_current[0]
+            )
+            minimum_margin_index = int(torch.argmin(joint_margins))
+            minimum_margin = float(joint_margins[minimum_margin_index])
+            warning_threshold = max(0.0, float(args.joint_limit_warning_rad))
+            warning_joint = RIGHT_ARM_JOINTS[minimum_margin_index]
+            if minimum_margin <= warning_threshold:
+                warning_body_id = arm_joint_body_ids[minimum_margin_index]
+                limit_marker.visualize(robot.data.body_pos_w[:, warning_body_id])
+                if warning_joint != last_limit_warning_joint:
+                    current_angle = float(arm_current[0, minimum_margin_index])
+                    print(
+                        f"[joint-limit-warning] joint={warning_joint} "
+                        f"q={current_angle:.4f} margin_rad={minimum_margin:.4f}",
+                        file=sys.stderr, flush=True,
+                    )
+                last_limit_warning_joint = warning_joint
+            else:
+                limit_marker.visualize(hidden_limit_marker_pos)
+                if last_limit_warning_joint is not None:
+                    print("[joint-limit-warning] cleared", file=sys.stderr, flush=True)
+                last_limit_warning_joint = None
             arm_command = arm_desired.detach()
             if args.debug_ik and phase in (
                 0, pregrasp_end - 1, grasp_end - 1,
                 close_end - 1, lift_end - 1, cycle_steps - 1,
             ):
-                joint_margins = torch.minimum(
-                    arm_current[0] - limits[:, 0], limits[:, 1] - arm_current[0]
-                )
-                minimum_margin_index = int(torch.argmin(joint_margins))
                 print(
                     f"[IK debug] phase={phase} ee={ee_pose_w[0, :3].cpu().tolist()} "
                     f"target={target_pos_w.cpu().tolist()} error_b={pos_error[0].cpu().tolist()} "
