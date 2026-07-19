@@ -71,6 +71,10 @@ def main() -> None:
     parser.add_argument("--output", default="outputs/gui_collect")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--object-randomization-m", type=float, default=0.04)
+    parser.add_argument(
+        "--nearby-ik-test", action="store_true",
+        help="将圆柱固定在右手附近，并用初始腕位姿的小偏移验证手臂 IK（绕过 HUG）",
+    )
     parser.add_argument("--episodes", type=int, default=None)
     parser.add_argument("--keep-success-visuals", type=int, default=5)
     parser.add_argument("--keep-failure-visuals", type=int, default=5)
@@ -122,9 +126,14 @@ def main() -> None:
             obj = env.scene["object"]
             default_state = obj.data.default_root_state.clone()
             default_state[:, :3] += env.scene.env_origins
-            randomization = max(0.0, args.object_randomization_m)
-            default_state[:, 0] += episode_rng.uniform(-randomization, randomization)
-            default_state[:, 1] += episode_rng.uniform(-randomization, randomization)
+            if args.nearby_ik_test:
+                default_state[:, :3] = torch.tensor(
+                    [-0.040, 0.380, 0.860], device=env.device
+                )
+            else:
+                randomization = max(0.0, args.object_randomization_m)
+                default_state[:, 0] += episode_rng.uniform(-randomization, randomization)
+                default_state[:, 1] += episode_rng.uniform(-randomization, randomization)
             obj.write_root_pose_to_sim(default_state[:, :7])
             obj.write_root_velocity_to_sim(torch.zeros_like(default_state[:, 7:13]))
             env.scene.write_data_to_sim()
@@ -244,7 +253,26 @@ def main() -> None:
                 raise RuntimeError(f"烧杯条件点不在 HUG 图像内: {(u_224, v_224)}")
             start_pos = robot.data.body_pos_w[0, right_hand_index].clone()
             start_quat = robot.data.body_quat_w[0, right_hand_index].clone()
-            if args.use_hug and args.auto_collect:
+            if args.nearby_ik_test:
+                # This target is only 67 mm from the reset wrist pose and keeps
+                # the exact reset orientation. It isolates arm IK from HUG and
+                # places the cylinder about 96 mm in front of the hand base.
+                grasp_pos = start_pos + torch.tensor(
+                    [-0.040, 0.050, 0.020], device=env.device
+                )
+                grasp_quat = start_quat.clone()
+                hand_target = args.hand_closure_scale * np.array(
+                    [1.5, 1.5, 1.5, 1.5, 0.45, 0.6], dtype=np.float32
+                )
+                hug_distance = float(torch.linalg.vector_norm(grasp_pos - object_center))
+                planning_valid = True
+                planning_failure = None
+                print(
+                    f"[nearby-ik-test] start={start_pos.cpu().tolist()} "
+                    f"grasp={grasp_pos.cpu().tolist()} object={object_center.cpu().tolist()}",
+                    file=sys.stderr, flush=True,
+                )
+            elif args.use_hug and args.auto_collect:
                 from .hug_bridge import run_hug_capture
                 hug_candidates = run_hug_capture(
                     project=project, episode_index=index,
@@ -312,15 +340,18 @@ def main() -> None:
             # hand's initial position.  The latter can put the pre-grasp on the
             # object side of a bad/noisy grasp and make the open hand collide
             # with the object before executing the final approach.
-            retreat_direction = grasp_pos - object_center
-            retreat_norm = torch.linalg.vector_norm(retreat_direction)
-            if float(retreat_norm) < 1e-6:
-                # A grasp exactly at the object center has no radial direction;
-                # use the current hand side as a deterministic fallback.
-                retreat_direction = start_pos - object_center
+            if args.nearby_ik_test:
+                pregrasp_pos = torch.lerp(start_pos, grasp_pos, 0.5)
+            else:
+                retreat_direction = grasp_pos - object_center
                 retreat_norm = torch.linalg.vector_norm(retreat_direction)
-            retreat_direction = retreat_direction / torch.clamp(retreat_norm, min=1e-6)
-            pregrasp_pos = grasp_pos + 0.10 * retreat_direction
+                if float(retreat_norm) < 1e-6:
+                    # A grasp exactly at the object center has no radial direction;
+                    # use the current hand side as a deterministic fallback.
+                    retreat_direction = start_pos - object_center
+                    retreat_norm = torch.linalg.vector_norm(retreat_direction)
+                retreat_direction = retreat_direction / torch.clamp(retreat_norm, min=1e-6)
+                pregrasp_pos = grasp_pos + 0.10 * retreat_direction
             lift_pos = grasp_pos + torch.tensor([0.0, 0.0, 0.12], device=env.device)
             within_coarse_workspace = hug_distance <= 0.35 if args.use_hug and args.auto_collect else True
             print(

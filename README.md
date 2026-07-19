@@ -169,6 +169,20 @@ pre-grasp/grasp 到点门控可能增加物理等待步数。
 54.8 mm，但 Isaac 实测最小软限位余量为 -0.0072 rad，说明官方 URDF 优化边界与当前
 Isaac USD 软限位并不完全相同；当前仍按 Isaac 限位裁剪命令，不能用越界解强行执行。
 
+可用 `--nearby-ik-test` 绕过 HUG 做确定可达区域验证：圆柱固定在
+`(-0.040, 0.380, 0.860) m`，腕部保持初始旋转并仅平移
+`(-0.040, +0.050, +0.020) m`（总位移约67 mm）。XR IK 实测 pre-grasp 误差约
+14.3 mm、grasp 误差约22.4 mm，均低于40 mm到点门限，并成功形成近距离夹持；物体
+末段最低抬升27.3 mm，略低于30 mm成功阈值，且角速度过大，所以严格标签仍为失败。
+完整双视角帧保存在 `outputs/xr_ik_nearby_visual/episode_000000.failed/images/`。
+
+```bash
+PYTHONPATH="$PWD/src:$PYTHONPATH" conda run --no-capture-output -n unitree_sim_env \
+python -m lab_g1_collect.sim_smoke --device cpu --headless --steps 900 --episodes 1 \
+  --auto-collect --object-shape cylinder --nearby-ik-test --arm-ik xr_teleoperate \
+  --keep-failure-visuals 1 --output outputs/xr_ik_nearby_visual
+```
+
 已有 episode 可用下面的诊断工具区分目标轨迹跟踪误差与离线 Pinocchio/Isaac FK
 不一致。图中的红点只表示在线跟踪误差首次超过门限，不能在 FK 模型一致性验证通过前
 解释为该 Cartesian 点在物理上不可达：
