@@ -22,6 +22,7 @@ class EpisodeWriter:
         self.depths: list[np.ndarray] = []
         self.ee_actual: list[np.ndarray] = []
         self.ee_target: list[np.ndarray] = []
+        self.image_arrays: list[dict[str, np.ndarray]] = []
 
     def add_frame(self, *, timestamp: float, state: np.ndarray, action: np.ndarray,
                   images: dict[str, np.ndarray], depth: np.ndarray | None = None,
@@ -33,11 +34,13 @@ class EpisodeWriter:
             raise ValueError("state/action 必须是右臂 7 + 右手 6，共 13 维")
         index = len(self.rows)
         image_paths = {}
+        buffered_images = {}
         for camera, array in images.items():
             target = self.work / "images" / f"{index:06d}_{camera}.png"
-            Image.fromarray(np.asarray(array, dtype=np.uint8), mode="RGB").save(target)
             image_paths[camera] = str(target.relative_to(self.work))
+            buffered_images[camera] = np.asarray(array, dtype=np.uint8).copy()
         self.rows.append({"frame_index": index, "timestamp": float(timestamp), "images": image_paths})
+        self.image_arrays.append(buffered_images)
         self.states.append(state)
         self.actions.append(action)
         if depth is not None:
@@ -68,10 +71,13 @@ class EpisodeWriter:
                 raise RuntimeError("末端位姿帧数与 episode 帧数不一致")
             arrays["observation.ee_pose_w"] = np.stack(self.ee_actual)
             arrays["target.ee_pose_w"] = np.stack(self.ee_target)
-        if not keep_visuals:
+        if keep_visuals:
+            for row, buffered in zip(self.rows, self.image_arrays):
+                for camera, array in buffered.items():
+                    target = self.work / row["images"][camera]
+                    Image.fromarray(array, mode="RGB").save(target)
+        else:
             for row in self.rows:
-                for relative in row["images"].values():
-                    (self.work / relative).unlink(missing_ok=True)
                 row["images"] = {}
         np.savez_compressed(self.work / "episode.npz", **arrays)
         (self.work / "frames.jsonl").write_text(

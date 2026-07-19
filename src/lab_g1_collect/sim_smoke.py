@@ -389,7 +389,7 @@ def main() -> None:
             return pos, quat, hand
         expanded = compact_to_isaac_action(np.r_[arm_default, np.zeros(6, dtype=np.float32)], joint_names, default_pos)
         writer = None
-        capture_stride = 3
+        capture_stride = 10
         root = Path(args.output)
         episode_index = 0
         completed_episodes = 0
