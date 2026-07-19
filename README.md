@@ -191,6 +191,25 @@ pre-grasp 高度达到约1.067 m。XR IK 在 pre-grasp 最终仍差70.2 mm，并
 阶段。这说明圆柱左移20 mm并未解决问题，主要矛盾仍是HUG旋转加固定100 mm径向
 pre-grasp与Isaac腕部限位的组合，而不是圆柱原位置本身。
 
+批量比较摆放位置时，可用 `--object-grid-xy N --object-grid-step-m STEP` 以
+`--object-fixed-xyz` 为中心逐 episode 扫描 N×N 个 XY 位置。程序会把实际物体初始
+位置、HUG grasp/pre-grasp 目标和 IK 跟踪失败阶段写入各 episode 的 `metadata.json`：
+
+```bash
+PYTHONPATH="$PWD/src:$PYTHONPATH" conda run --no-capture-output -n unitree_sim_env \
+python -m lab_g1_collect.sim_smoke --device cpu --headless --steps 7000 --episodes 9 \
+  --auto-collect --object-shape cylinder --object-fixed-xyz -0.080 0.340 0.860 \
+  --object-grid-xy 3 --object-grid-step-m 0.020 --arm-ik xr_teleoperate \
+  --output outputs/xr_ik_position_grid_left_3x3
+```
+
+2026-07-19 的两轮3×3位置扫描中，只有 `(-0.080, 0.360, 0.860) m` 和
+`(-0.060, 0.360, 0.860) m` 各出现一次完整 pre-grasp/grasp 到点并执行闭手与抬升，
+但均未抬起圆柱。两点各追加5次后，完整执行分别为1/5和0/5，严格成功均为0。
+详细记录见 `docs/ik_object_position_sweep_2026-07-19.md`。结果表明当前 HUG 腕旋转及
+外推 pre-grasp 的采样波动大于20 mm物体平移的影响，不能把单次 tracking timeout
+解释为该物体位置在G1右臂工作空间中没有运动学解。
+
 GUI会持续检查7个右臂关节到Isaac软限位的最小余量。默认余量不超过0.08 rad时，
 对应关节/link中心会出现半径40 mm的红色警示球，终端同时打印
 `[joint-limit-warning]`、关节名、当前角度和余量；离开警戒区后红球自动隐藏。可用

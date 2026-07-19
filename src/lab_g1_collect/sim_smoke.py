@@ -80,6 +80,14 @@ def main() -> None:
         help="用世界坐标固定物体位置并关闭XY随机化，例如 -0.06 0.38 0.86",
     )
     parser.add_argument(
+        "--object-grid-xy", type=int, default=None,
+        help="以--object-fixed-xyz为中心生成N×N个XY位置（建议奇数）",
+    )
+    parser.add_argument(
+        "--object-grid-step-m", type=float, default=0.02,
+        help="物体XY网格相邻位置间距，默认0.02 m",
+    )
+    parser.add_argument(
         "--nearby-ik-test", action="store_true",
         help="将圆柱固定在右手附近，并用初始腕位姿的小偏移验证手臂 IK（绕过 HUG）",
     )
@@ -88,6 +96,19 @@ def main() -> None:
     parser.add_argument("--keep-failure-visuals", type=int, default=5)
     args = parser.parse_args()
     episode_rng = random.Random(args.seed)
+    object_grid = None
+    if args.object_grid_xy is not None:
+        if args.object_fixed_xyz is None:
+            parser.error("--object-grid-xy requires --object-fixed-xyz X Y Z")
+        grid_size = max(1, args.object_grid_xy)
+        half = (grid_size - 1) / 2.0
+        step = max(0.0, args.object_grid_step_m)
+        center = args.object_fixed_xyz
+        object_grid = [
+            [center[0] + (ix - half) * step, center[1] + (iy - half) * step, center[2]]
+            for ix in range(grid_size) for iy in range(grid_size)
+        ]
+    reset_index = 0
     os.environ["LAB_OBJECT_SHAPE"] = args.object_shape
 
     project = Path(__file__).resolve().parents[2]
@@ -130,11 +151,16 @@ def main() -> None:
         zero_action = torch.zeros(env.action_space.shape, device=env.device)
 
         def reset_scene():
+            nonlocal reset_index
             observation, _ = env.reset()
             obj = env.scene["object"]
             default_state = obj.data.default_root_state.clone()
             default_state[:, :3] += env.scene.env_origins
-            if args.object_fixed_xyz is not None:
+            if object_grid is not None:
+                grid_position = object_grid[reset_index % len(object_grid)]
+                reset_index += 1
+                default_state[:, :3] = torch.tensor(grid_position, device=env.device)
+            elif args.object_fixed_xyz is not None:
                 default_state[:, :3] = torch.tensor(
                     args.object_fixed_xyz, device=env.device
                 )
@@ -459,6 +485,7 @@ def main() -> None:
         with TerminalKeyReader(enabled=not args.headless) as keys, open("/dev/null", "w") as sink:
           print("[sim-collect] terminal shortcut: press r to reset", file=sys.stderr, flush=True)
           initial_beaker_z = float(env.scene["object"].data.root_pos_w[0, 2])
+          initial_object_xyz = env.scene["object"].data.root_pos_w[0].cpu().tolist()
           initial_hand_z = float(robot.data.body_pos_w[0, right_hand_index, 2])
           stability_samples = []
           episode_start_step = 0
@@ -625,11 +652,15 @@ def main() -> None:
                     samples = np.asarray(stability_samples, dtype=np.float64)
                     metrics = {
                         "min_lift_m": float(samples[:, 0].min()),
-                    "max_finger_distance_m": float(samples[:, 1].max()),
+                        "max_finger_distance_m": float(samples[:, 1].max()),
                         "max_linear_speed_mps": float(samples[:, 2].max()),
                         "max_angular_speed_radps": float(samples[:, 3].max()),
                         "min_hand_lift_m": float(samples[:, 4].min()),
                         "max_hand_target_error_m": float(samples[:, 5].max()),
+                        "object_initial_xyz": initial_object_xyz,
+                        "grasp_target_xyz": plan["grasp_pos"].cpu().tolist(),
+                        "pregrasp_target_xyz": plan["pregrasp_pos"].cpu().tolist(),
+                        "planning_failure": plan["planning_failure"],
                     }
                     checks = {
                         "planning_valid": bool(plan["planning_valid"]),
@@ -665,6 +696,7 @@ def main() -> None:
                     with contextlib.redirect_stdout(sink):
                         observation = reset_scene()
                     initial_beaker_z = float(env.scene["object"].data.root_pos_w[0, 2])
+                    initial_object_xyz = env.scene["object"].data.root_pos_w[0].cpu().tolist()
                     initial_hand_z = float(robot.data.body_pos_w[0, right_hand_index, 2])
                     arm_command = torch.tensor(arm_default, device=env.device)
                     stability_samples.clear()
