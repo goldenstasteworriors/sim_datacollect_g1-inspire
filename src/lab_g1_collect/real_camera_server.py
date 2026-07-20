@@ -20,7 +20,13 @@ def main() -> None:
     parser.add_argument("--height", type=int, default=480)
     parser.add_argument("--fps", type=int, default=30)
     parser.add_argument("--serial", help="可选的 RealSense 序列号")
+    parser.add_argument(
+        "--max-consecutive-timeouts", type=int, default=3,
+        help="连续多少次 5 秒无帧后退出并交给服务管理器重启",
+    )
     args = parser.parse_args()
+    if args.max_consecutive_timeouts < 1:
+        raise SystemExit("--max-consecutive-timeouts 必须至少为 1")
 
     try:
         import cv2
@@ -51,9 +57,22 @@ def main() -> None:
         f"{args.width}x{args.height}@{args.fps}, depth_scale={depth_scale_m}",
         flush=True,
     )
+    consecutive_timeouts = 0
     try:
         while True:
-            frames = align.process(pipeline.wait_for_frames())
+            try:
+                frames = align.process(pipeline.wait_for_frames())
+                consecutive_timeouts = 0
+            except RuntimeError as exc:
+                consecutive_timeouts += 1
+                print(
+                    f"[RealSense warning] frame timeout "
+                    f"{consecutive_timeouts}/{args.max_consecutive_timeouts}: {exc}",
+                    flush=True,
+                )
+                if consecutive_timeouts >= args.max_consecutive_timeouts:
+                    raise
+                continue
             color_frame = frames.get_color_frame()
             depth_frame = frames.get_depth_frame()
             if not color_frame or not depth_frame:
