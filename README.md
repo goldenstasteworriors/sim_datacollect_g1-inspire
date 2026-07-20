@@ -171,6 +171,10 @@ pre-grasp/grasp 到点门控可能增加物理等待步数。
 姿态残差、求解状态和最小关节余量。20次对照见
 `docs/autonomous_ik_profile_experiment_2026-07-20.md`。
 
+同一自主 IK 在 LabUtopia 烧杯上的20次测试见
+`docs/autonomous_ik_beaker_experiment_2026-07-20.md`。烧杯动态到达12/20、实际抓起5/20；
+其 HUG 腕姿态残差明显高于圆柱，是当前主要差异。
+
 `--ik-rotation-weight 0` 可做仅位置 IK 对照。一次去除离线 IK 后的圆柱实测中，默认
 姿态权重在 pre-grasp 超时，剩余位置误差 97 mm；仅位置控制能够越过 pre-grasp，
 但在后续 100 mm 直线 approach 末端仍剩余 97 mm，且关节限位余量约 0.85 rad。
