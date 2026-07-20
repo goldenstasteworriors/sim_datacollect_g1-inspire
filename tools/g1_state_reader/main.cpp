@@ -19,9 +19,9 @@ constexpr const char* kPrefix = "G1_LOWSTATE_JSON ";
 constexpr std::array<int, 7> kRightArmIndices = {22, 23, 24, 25, 26, 27, 28};
 constexpr std::array<int, 3> kWaistIndices = {12, 13, 14};
 
-template <std::size_t N>
+template <typename MotorContainer, std::size_t N>
 void PrintMotorField(
-    const std::vector<unitree_hg::msg::dds_::MotorState_>& motors,
+    const MotorContainer& motors,
     const std::array<int, N>& indices,
     bool velocity) {
   std::cout << "[";
