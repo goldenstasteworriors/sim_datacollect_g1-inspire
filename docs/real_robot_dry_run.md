@@ -50,11 +50,11 @@ cd /home/unitree/data_collection/GR00T-WholeBodyControl
 
 ## 2. 只读抓图
 
-在本机执行；把 `<robot-camera-ip>` 换成有线连接下机器人计算机的地址：
+在本机执行；当前有线连接的机器人相机地址已写入配置：
 
 ```bash
 conda activate unitree_sim_env
-lab-g1-real --camera-host <robot-camera-ip> --capture-only \
+lab-g1-real --capture-only \
   --output outputs/real_robot_dry_run/check_camera
 ```
 
@@ -105,7 +105,6 @@ lab-g1-real \
 
 ## 5. 当前尚不能省略的实机信息
 
-- 机器人相机主机的 IP 或 SSH `Host` 别名；
 - 实际安装后的 `T_base_camera` 外参；
 - 抓图时右臂 7 关节状态；
 - 瓶身上有效深度像素。

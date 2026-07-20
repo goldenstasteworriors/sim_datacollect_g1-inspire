@@ -3,7 +3,7 @@ safety:
   allow_control: false
 
 camera:
-  host: null
+  host: 192.168.123.164
   port: 5555
   timeout_s: 10.0
   protocol: lab-g1-rgbd-v1
