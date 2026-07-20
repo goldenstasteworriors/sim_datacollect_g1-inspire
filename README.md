@@ -164,6 +164,13 @@ pre-grasp/grasp 到点门控可能增加物理等待步数。
 在线到点门控仍会记录实际末端未能在规定时间进入 40 mm 容差的执行失败，但不再把它
 表述为离线模型证明的运动学不可达。
 
+`xr_teleoperate` 默认使用 `--xr-ik-profile autonomous`：将上游遥操作目标改为位置优先，
+用 Isaac 实际软限位作为硬约束，以区间中心代替全零关节正则，并跳过遥操作用的4帧
+移动平均。`--xr-ik-profile teleop` 可恢复上游原始权重做对照。每个 episode 在运动前
+还会用独立求解器依次直接求 pre-grasp 和 grasp，`endpoint_ik_probes` 记录静态位置、
+姿态残差、求解状态和最小关节余量。20次对照见
+`docs/autonomous_ik_profile_experiment_2026-07-20.md`。
+
 `--ik-rotation-weight 0` 可做仅位置 IK 对照。一次去除离线 IK 后的圆柱实测中，默认
 姿态权重在 pre-grasp 超时，剩余位置误差 97 mm；仅位置控制能够越过 pre-grasp，
 但在后续 100 mm 直线 approach 末端仍剩余 97 mm，且关节限位余量约 0.85 rad。
