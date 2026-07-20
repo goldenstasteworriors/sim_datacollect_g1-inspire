@@ -57,6 +57,10 @@ def main() -> None:
         help="手臂 IK：宇树 xr_teleoperate 官方 G1_29 CasADi IK，或旧的本地 DLS 对照",
     )
     parser.add_argument(
+        "--xr-ik-profile", choices=("autonomous", "teleop"), default="autonomous",
+        help="XR IK权衡：自主抓取位置优先并对齐Isaac软限位，或上游遥操作原始权重",
+    )
+    parser.add_argument(
         "--ik-rotation-weight", type=float, default=0.25,
         help="pre-grasp/grasp 阶段 DLS 姿态误差权重；0 用于仅验证位置可达性",
     )
@@ -268,15 +272,24 @@ def main() -> None:
         last_limit_warning_joint = None
 
         xr_arm_ik = None
+        xr_probe_ik = None
         xr_right_frame_correction = None
         if args.arm_ik == "xr_teleoperate":
             from .xr_teleoperate_ik import XrTeleoperateArmIK
-            xr_arm_ik = XrTeleoperateArmIK(project)
+            xr_arm_ik = XrTeleoperateArmIK(project, profile=args.xr_ik_profile)
+            xr_probe_ik = XrTeleoperateArmIK(project, profile=args.xr_ik_profile)
             dual_q = np.r_[
                 robot.data.joint_pos[0, left_arm_joint_ids].cpu().numpy(),
                 robot.data.joint_pos[0, arm_joint_ids].cpu().numpy(),
             ]
-            model_right = np.asarray(xr_arm_ik.initialize(dual_q)["right"])
+            left_limits = robot.data.soft_joint_pos_limits[0, left_arm_joint_ids].cpu().numpy()
+            right_limits = robot.data.soft_joint_pos_limits[0, arm_joint_ids].cpu().numpy()
+            dual_lower = np.r_[left_limits[:, 0], right_limits[:, 0]]
+            dual_upper = np.r_[left_limits[:, 1], right_limits[:, 1]]
+            model_right = np.asarray(
+                xr_arm_ik.initialize(dual_q, dual_lower, dual_upper)["right"]
+            )
+            xr_probe_ik.initialize(dual_q, dual_lower, dual_upper)
             root_pose = robot.data.root_pose_w
             actual_right = robot.data.body_pose_w[:, right_hand_index]
             actual_pos_b, actual_quat_b = subtract_frame_transforms(
@@ -290,6 +303,44 @@ def main() -> None:
                 "[arm-ik] using xr_teleoperate G1_29_ArmIK (CasADi/IPOPT)",
                 file=sys.stderr, flush=True,
             )
+
+        def xr_target_matrix(target_pos_w, target_quat_w):
+            root_pose = robot.data.root_pose_w
+            target_pos_b, target_quat_b = subtract_frame_transforms(
+                root_pose[:, :3], root_pose[:, 3:7],
+                target_pos_w.unsqueeze(0), target_quat_w.unsqueeze(0),
+            )
+            actual_target = np.eye(4)
+            actual_target[:3, :3] = matrix_from_quat(target_quat_b)[0].cpu().numpy()
+            actual_target[:3, 3] = target_pos_b[0].cpu().numpy()
+            return actual_target @ np.linalg.inv(xr_right_frame_correction), actual_target
+
+        def probe_xr_endpoint(name, target_pos_w, target_quat_w, dual_q):
+            xr_target, actual_target = xr_target_matrix(target_pos_w, target_quat_w)
+            result = xr_probe_ik.probe(xr_target, dual_q)
+            predicted_actual = result["right"] @ xr_right_frame_correction
+            position_error = float(np.linalg.norm(
+                predicted_actual[:3, 3] - actual_target[:3, 3]
+            ))
+            rotation_delta = predicted_actual[:3, :3] @ actual_target[:3, :3].T
+            rotation_error = float(np.arccos(np.clip(
+                (np.trace(rotation_delta) - 1.0) * 0.5, -1.0, 1.0
+            )))
+            q = result["q"]
+            margins = np.minimum(q - dual_lower, dual_upper - q)
+            endpoint = {
+                "name": name,
+                "solver_success": result["solver_success"],
+                "position_error_m": position_error,
+                "rotation_error_deg": float(np.degrees(rotation_error)),
+                "minimum_joint_margin_rad": float(margins.min()),
+                "within_10mm_15deg": bool(
+                    result["solver_success"] and position_error <= 0.01
+                    and rotation_error <= np.deg2rad(15.0)
+                ),
+            }
+            print(f"[IK endpoint probe] {endpoint}", file=sys.stderr, flush=True)
+            return endpoint, q
 
         def plan_episode(index: int):
             front = env.scene["front_camera"].data
@@ -460,6 +511,19 @@ def main() -> None:
                 retreat_direction = retreat_direction / torch.clamp(retreat_norm, min=1e-6)
                 pregrasp_pos = grasp_pos + max(0.0, args.pregrasp_offset_m) * retreat_direction
             lift_pos = grasp_pos + torch.tensor([0.0, 0.0, 0.12], device=env.device)
+            endpoint_probes = None
+            if xr_probe_ik is not None:
+                probe_q = np.r_[
+                    robot.data.joint_pos[0, left_arm_joint_ids].cpu().numpy(),
+                    robot.data.joint_pos[0, arm_joint_ids].cpu().numpy(),
+                ]
+                pregrasp_probe, probe_q = probe_xr_endpoint(
+                    "pregrasp", pregrasp_pos, grasp_quat, probe_q
+                )
+                grasp_probe, _probe_q = probe_xr_endpoint(
+                    "grasp", grasp_pos, grasp_quat, probe_q
+                )
+                endpoint_probes = {"pregrasp": pregrasp_probe, "grasp": grasp_probe}
             within_coarse_workspace = hug_distance <= 0.35 if args.use_hug and args.auto_collect else True
             print(
                 "[HUG target] "
@@ -489,6 +553,7 @@ def main() -> None:
                 "pregrasp_reached": False,
                 "grasp_reached": False,
                 "failure_category": None,
+                "endpoint_ik_probes": endpoint_probes,
             }
 
         def target_for_phase(plan: dict, phase: int):
@@ -592,10 +657,7 @@ def main() -> None:
                     robot.data.joint_vel[0, left_arm_joint_ids].cpu().numpy(),
                     robot.data.joint_vel[0, arm_joint_ids].cpu().numpy(),
                 ]
-                actual_target = np.eye(4)
-                actual_target[:3, :3] = matrix_from_quat(target_quat_b)[0].cpu().numpy()
-                actual_target[:3, 3] = target_pos_b[0].cpu().numpy()
-                right_target = actual_target @ np.linalg.inv(xr_right_frame_correction)
+                right_target, _actual_target = xr_target_matrix(target_pos_w, target_quat_w)
                 solution_q = xr_arm_ik.solve(right_target, dual_q, dual_dq)
                 arm_desired = torch.tensor(solution_q[-7:], device=env.device, dtype=arm_current.dtype)
             else:
@@ -771,6 +833,7 @@ def main() -> None:
                         "grasp_reached": plan["grasp_reached"],
                         "failure_category": plan["failure_category"],
                         "approach_diagnostics": approach_diagnostics,
+                        "endpoint_ik_probes": plan["endpoint_ik_probes"],
                     }
                     checks = {
                         "planning_valid": bool(plan["planning_valid"]),
@@ -900,6 +963,8 @@ def main() -> None:
         print(json.dumps(report, ensure_ascii=False, indent=2), file=sys.stderr, flush=True)
         if xr_arm_ik is not None:
             xr_arm_ik.close()
+        if xr_probe_ik is not None:
+            xr_probe_ik.close()
         env.close()
     except BaseException:
         traceback.print_exc(file=sys.stderr)
