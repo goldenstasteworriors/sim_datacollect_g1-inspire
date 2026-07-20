@@ -297,6 +297,24 @@ def main() -> None:
         pregrasp_marker = VisualizationMarkers(
             pregrasp_marker_cfg.replace(prim_path="/Visuals/HUGPregraspPose")
         )
+        reach_path_cfg = SPHERE_MARKER_CFG.copy()
+        reach_path_cfg.markers["sphere"].radius = 0.009
+        reach_path_cfg.markers["sphere"].visual_material.diffuse_color = (0.10, 0.35, 1.00)
+        reach_path_marker = VisualizationMarkers(
+            reach_path_cfg.replace(prim_path="/Visuals/RealPlanReachPath")
+        )
+        approach_path_cfg = SPHERE_MARKER_CFG.copy()
+        approach_path_cfg.markers["sphere"].radius = 0.010
+        approach_path_cfg.markers["sphere"].visual_material.diffuse_color = (1.00, 0.35, 0.05)
+        approach_path_marker = VisualizationMarkers(
+            approach_path_cfg.replace(prim_path="/Visuals/RealPlanApproachPath")
+        )
+        lift_path_cfg = SPHERE_MARKER_CFG.copy()
+        lift_path_cfg.markers["sphere"].radius = 0.010
+        lift_path_cfg.markers["sphere"].visual_material.diffuse_color = (0.10, 0.90, 0.25)
+        lift_path_marker = VisualizationMarkers(
+            lift_path_cfg.replace(prim_path="/Visuals/RealPlanLiftPath")
+        )
         limit_marker_cfg = SPHERE_MARKER_CFG.copy()
         limit_marker_cfg.markers["sphere"].radius = 0.04
         limit_marker = VisualizationMarkers(
@@ -652,6 +670,26 @@ def main() -> None:
             else:
                 pos, quat, hand = plan["lift_pos"], plan["grasp_quat"], plan["hand_target"]
             return pos, quat, hand
+
+        def visualize_plan(plan: dict) -> None:
+            hug_marker.visualize(plan["grasp_pos"].unsqueeze(0), plan["grasp_quat"].unsqueeze(0))
+            pregrasp_marker.visualize(
+                plan["pregrasp_pos"].unsqueeze(0), plan["grasp_quat"].unsqueeze(0)
+            )
+            alpha_reach = torch.linspace(0.0, 1.0, 24, device=env.device).unsqueeze(1)
+            alpha_short = torch.linspace(0.0, 1.0, 12, device=env.device).unsqueeze(1)
+            reach_path_marker.visualize(
+                plan["start_pos"].unsqueeze(0)
+                + alpha_reach * (plan["pregrasp_pos"] - plan["start_pos"]).unsqueeze(0)
+            )
+            approach_path_marker.visualize(
+                plan["pregrasp_pos"].unsqueeze(0)
+                + alpha_short * (plan["grasp_pos"] - plan["pregrasp_pos"]).unsqueeze(0)
+            )
+            lift_path_marker.visualize(
+                plan["grasp_pos"].unsqueeze(0)
+                + alpha_short * (plan["lift_pos"] - plan["grasp_pos"]).unsqueeze(0)
+            )
         expanded = compact_to_isaac_action(np.r_[arm_default, np.zeros(6, dtype=np.float32)], joint_names, default_pos)
         writer = None
         capture_stride = 10
@@ -687,8 +725,7 @@ def main() -> None:
         else:
             current_episode_index = 0
         plan = plan_episode(current_episode_index)
-        hug_marker.visualize(plan["grasp_pos"].unsqueeze(0), plan["grasp_quat"].unsqueeze(0))
-        pregrasp_marker.visualize(plan["pregrasp_pos"].unsqueeze(0), plan["grasp_quat"].unsqueeze(0))
+        visualize_plan(plan)
         print(f"[sim-collect] episode {current_episode_index:06d} planned", file=sys.stderr, flush=True)
         import contextlib
         with TerminalKeyReader(enabled=not args.headless) as keys, open("/dev/null", "w") as sink:
@@ -996,10 +1033,7 @@ def main() -> None:
                     plan = plan_episode(current_episode_index)
                     if not plan["planning_valid"]:
                         motion_phase = cycle_steps - 1
-                    hug_marker.visualize(plan["grasp_pos"].unsqueeze(0), plan["grasp_quat"].unsqueeze(0))
-                    pregrasp_marker.visualize(
-                        plan["pregrasp_pos"].unsqueeze(0), plan["grasp_quat"].unsqueeze(0)
-                    )
+                    visualize_plan(plan)
                     print(f"[sim-collect] episode {current_episode_index:06d} running", file=sys.stderr, flush=True)
                     continue
             # Do not start the straight approach until the measured hand has
