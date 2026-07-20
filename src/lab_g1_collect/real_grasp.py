@@ -12,6 +12,7 @@ import yaml
 from PIL import Image, ImageDraw
 
 from .arm_ik import solve_right_arm_ik
+from .g1_camera_geometry import OFFICIAL_G1_MJCF_URL, official_g1_T_pelvis_camera_optical
 from .hug_bridge import run_hug_capture
 from .real_camera import CameraClient, CameraFrame
 from .real_state import read_g1_arm_state
@@ -88,16 +89,13 @@ def _pixel_xyz(K: np.ndarray, u: float, v: float, depth_m: float) -> np.ndarray:
     )
 
 
-def _matrix(config: dict[str, Any], key: str) -> np.ndarray:
-    calibration = config["calibration"]
-    if calibration.get("valid") is not True:
-        raise ValueError("T_base_camera 尚未标定；为防止错误坐标规划，已拒绝继续")
-    matrix = np.asarray(calibration[key], dtype=np.float64)
-    if matrix.shape != (4, 4) or not np.isfinite(matrix).all():
-        raise ValueError(f"{key} 应为有限值 4x4 矩阵")
-    if not np.allclose(matrix[3], [0, 0, 0, 1], atol=1e-6):
-        raise ValueError(f"{key} 最后一行必须为 [0, 0, 0, 1]")
-    return matrix
+def _camera_matrix(config: dict[str, Any], waist_q: np.ndarray) -> tuple[np.ndarray, str]:
+    geometry = config.get("camera_geometry", {})
+    if geometry.get("model") != "official_g1_mjcf":
+        raise ValueError("camera_geometry.model 必须是 official_g1_mjcf")
+    return official_g1_T_pelvis_camera_optical(waist_q), str(
+        geometry.get("source", OFFICIAL_G1_MJCF_URL)
+    )
 
 
 def _generate_dry_run_trajectory(
@@ -144,7 +142,8 @@ def _generate_dry_run_trajectory(
 
 def _plan(
     *, project: Path, frame: CameraFrame, config: dict[str, Any], output: Path,
-    u: float, v: float, right_arm_q: np.ndarray, right_arm_source: str,
+    u: float, v: float, right_arm_q: np.ndarray, waist_q: np.ndarray,
+    right_arm_source: str, simulation_review: bool = False,
 ) -> dict[str, Any]:
     if not frame.has_metric_depth:
         raise ValueError(
@@ -154,7 +153,7 @@ def _plan(
     height, width = frame.rgb.shape[:2]
     if not (0 <= u < width and 0 <= v < height):
         raise ValueError(f"目标像素 ({u}, {v}) 超出图像 {width}x{height}")
-    T_base_camera = _matrix(config, "T_base_camera")
+    T_base_camera, camera_geometry_source = _camera_matrix(config, waist_q)
     depth = _robust_depth(frame.depth_m, u, v)
     object_camera = _pixel_xyz(frame.K, u, v, depth)
     object_base = (T_base_camera @ np.r_[object_camera, 1.0])[:3]
@@ -189,8 +188,9 @@ def _plan(
         result = solve_right_arm_ik(target[:3, 3], target[:3, :3], current)
         ik_results[name] = result
         current = result["joint_positions"]
-    if not all(result["reachable"] for result in ik_results.values()):
-        failures = [name for name, result in ik_results.items() if not result["reachable"]]
+    ik_failures = [name for name, result in ik_results.items() if not result["reachable"]]
+    if ik_failures and not simulation_review:
+        failures = ik_failures
         raise ValueError(f"IK dry-run 未通过: {', '.join(failures)}")
 
     trajectory = _generate_dry_run_trajectory(
@@ -207,7 +207,8 @@ def _plan(
         config["planner"]["fps"]
     )
     speed_limit = float(config["planner"]["max_arm_speed_rad_s"])
-    if max_arm_speed > speed_limit:
+    speed_limit_exceeded = max_arm_speed > speed_limit
+    if speed_limit_exceeded and not simulation_review:
         raise ValueError(
             f"dry-run 轨迹最大关节速度 {max_arm_speed:.3f} rad/s 超过 "
             f"配置上限 {speed_limit:.3f} rad/s"
@@ -222,6 +223,8 @@ def _plan(
         object_xyz_base=object_base,
         hand_target_rad=hand_target,
         current_right_arm_q=np.asarray(right_arm_q, dtype=np.float32),
+        waist_q=np.asarray(waist_q, dtype=np.float32),
+        T_base_camera=T_base_camera,
     )
     preview = Image.fromarray(frame.rgb)
     draw = ImageDraw.Draw(preview)
@@ -231,16 +234,28 @@ def _plan(
     preview.save(output / "target_preview.png")
     metadata = {
         "mode": "dry_run",
+        "simulation_review_only": simulation_review,
         "control_output_enabled": CONTROL_OUTPUT_ENABLED,
         "object_name": config["task"].get("object_name", "bottle"),
         "target_uv_full": [float(u), float(v)],
         "target_depth_m": depth,
         "object_xyz_base": object_base.tolist(),
         "current_right_arm_q": np.asarray(right_arm_q, dtype=float).tolist(),
+        "waist_q": np.asarray(waist_q, dtype=float).tolist(),
         "current_right_arm_source": right_arm_source,
+        "base_frame": "pelvis",
+        "camera_geometry": {
+            "model": "official_g1_mjcf",
+            "source": camera_geometry_source,
+            "T_pelvis_camera_optical": T_base_camera.tolist(),
+        },
         "trajectory_shape": list(trajectory.shape),
         "max_arm_speed_rad_s": max_arm_speed,
+        "configured_arm_speed_limit_rad_s": speed_limit,
+        "speed_limit_exceeded": speed_limit_exceeded,
         "hand_command_semantics": "Inspire URDF radians; not a hardware command",
+        "ik_all_reachable": not ik_failures,
+        "ik_failures": ik_failures,
         "ik": {
             name: {key: value for key, value in result.items() if key != "joint_positions"}
             for name, result in ik_results.items()
@@ -260,12 +275,20 @@ def main() -> None:
     parser.add_argument("--camera-port", type=int)
     parser.add_argument("--capture", type=Path, help="读取已有 capture.npz，不连接相机")
     parser.add_argument("--capture-only", action="store_true")
+    parser.add_argument(
+        "--simulation-review", action="store_true",
+        help="即使独立 URDF IK 预检失败也保存候选，仅允许后续 Isaac 安全复核",
+    )
     parser.add_argument("--target-u", type=float)
     parser.add_argument("--target-v", type=float)
     parser.add_argument(
         "--right-arm-q", type=float, nargs=7,
         metavar=("Q1", "Q2", "Q3", "Q4", "Q5", "Q6", "Q7"),
         help="可选离线覆盖；默认通过 SSH 从 rt/lowstate 自动读取",
+    )
+    parser.add_argument(
+        "--waist-q", type=float, nargs=3, metavar=("YAW", "ROLL", "PITCH"),
+        help="可选离线腰关节角覆盖；读取历史 capture 时应传入捕获时的腰姿态",
     )
     args = parser.parse_args()
 
@@ -304,6 +327,7 @@ def main() -> None:
     if args.right_arm_q is None:
         arm_state = read_g1_arm_state(config["robot_state"])
         right_arm_q = arm_state.q
+        waist_q = arm_state.waist_q if args.waist_q is None else np.asarray(args.waist_q)
         right_arm_source = arm_state.source
         print(
             json.dumps(
@@ -320,6 +344,9 @@ def main() -> None:
         )
     else:
         right_arm_q = np.asarray(args.right_arm_q)
+        if args.waist_q is None:
+            raise SystemExit("使用 --right-arm-q 离线规划时还必须指定 --waist-q YAW ROLL PITCH")
+        waist_q = np.asarray(args.waist_q)
         right_arm_source = "cli_override"
     metadata = _plan(
         project=Path(__file__).resolve().parents[2],
@@ -329,7 +356,9 @@ def main() -> None:
         u=args.target_u,
         v=args.target_v,
         right_arm_q=right_arm_q,
+        waist_q=waist_q,
         right_arm_source=right_arm_source,
+        simulation_review=args.simulation_review,
     )
     print(json.dumps(metadata, ensure_ascii=False, indent=2))
 

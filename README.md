@@ -287,8 +287,12 @@ cd /home/unitree/data_collection/GR00T-WholeBodyControl
 
 由于官方 composed camera 当前把 RealSense 深度也经过普通 JPEG 编码，完整 HUG
 dry-run 应改用本项目的 `lab-g1-rgbd-server`，它将深度对齐到彩色图并以 16 位 PNG
-传输，同时附带实际相机内参。尚未完成 `T_base_camera` 外参标定时，程序只允许
-`--capture-only`，不会生成机器人基座系抓取轨迹。
+传输，同时附带实际相机内参。相机到 pelvis 的位姿按 GR00T-WBC 官方 G1 MJCF
+和实时腰部 LowState 做链式 FK，不再要求单独标定一个静态 `T_base_camera`。
+
+真实图像生成的计划可用 `--replay-real-plan PLAN.npz` 仅在 Isaac 中回放；场景默认
+生成上表面为 `0.70 m` 的碰撞桌板，并记录非手指右臂接触力与桌面净空。首次真实瓶子
+评审结果见 `docs/real_bottle_sim_review_2026-07-20.md`。
 
 ## MANO wrist / Inspire base 交互标定
 

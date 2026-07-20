@@ -16,14 +16,11 @@ robot_state:
   timeout_s: 3.0
   max_abs_dq_rad_s: 1.0
 
-calibration:
-  # 必须完成实际相机到 G1 base 的手眼外参标定后才能改为 true。
-  valid: false
-  T_base_camera:
-    - [1.0, 0.0, 0.0, 0.0]
-    - [0.0, 1.0, 0.0, 0.0]
-    - [0.0, 0.0, 1.0, 0.0]
-    - [0.0, 0.0, 0.0, 1.0]
+camera_geometry:
+  # 使用 NVIDIA GR00T-WholeBodyControl 官方 G1 MJCF 的腰部链和 head_camera
+  # 固定位姿；T_pelvis_camera 会随 LowState 的 yaw/roll/pitch 在线计算。
+  model: official_g1_mjcf
+  source: https://github.com/NVlabs/GR00T-WholeBodyControl/blob/main/gear_sonic/data/robot_model/model_data/g1/g1_29dof_with_hand.xml
 
 task:
   object_name: bottle

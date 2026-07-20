@@ -80,9 +80,21 @@ def main() -> None:
         "--joint-limit-warning-rad", type=float, default=0.08,
         help="GUI中将接近Isaac软限位的右臂关节用红球标出的余量阈值",
     )
+    parser.add_argument(
+        "--waypoint-tolerance-m", type=float, default=0.04,
+        help="pre-grasp/grasp 动态到达门槛；默认严格值0.04 m",
+    )
     parser.add_argument("--output", default="outputs/gui_collect")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--object-randomization-m", type=float, default=0.04)
+    parser.add_argument(
+        "--table-top-height-m", type=float, default=0.70,
+        help="碰撞桌板上表面的世界坐标高度，默认与真实桌面一致为0.70 m",
+    )
+    parser.add_argument(
+        "--replay-real-plan", type=Path,
+        help="回放 real_grasp 生成的 dry_run_plan.npz；只在 Isaac 仿真内执行",
+    )
     parser.add_argument(
         "--object-fixed-xyz", type=float, nargs=3, default=None, metavar=("X", "Y", "Z"),
         help="用世界坐标固定物体位置并关闭XY随机化，例如 -0.06 0.38 0.86",
@@ -107,6 +119,22 @@ def main() -> None:
     parser.add_argument("--keep-success-visuals", type=int, default=5)
     parser.add_argument("--keep-failure-visuals", type=int, default=5)
     args = parser.parse_args()
+    if not 0.2 <= args.table_top_height_m <= 1.5:
+        parser.error("--table-top-height-m 必须在 0.2~1.5 m")
+    if not 0.01 <= args.waypoint_tolerance_m <= 0.06:
+        parser.error("--waypoint-tolerance-m 必须在 0.01~0.06 m")
+    replay_plan = None
+    if args.replay_real_plan is not None:
+        import numpy as np
+        plan_path = args.replay_real_plan.expanduser().resolve()
+        replay_plan = {key: value.copy() for key, value in np.load(plan_path).items()}
+        required = {
+            "T_base_pregrasp", "T_base_grasp", "T_base_lift",
+            "object_xyz_base", "hand_target_rad",
+        }
+        missing = sorted(required - replay_plan.keys())
+        if missing:
+            parser.error(f"real plan 缺少字段: {missing}")
     episode_rng = random.Random(args.seed)
     object_grid = None
     if args.object_grid_xy is not None:
@@ -125,6 +153,7 @@ def main() -> None:
         ]
     reset_index = 0
     os.environ["LAB_OBJECT_SHAPE"] = args.object_shape
+    os.environ["LAB_TABLE_TOP_HEIGHT_M"] = str(args.table_top_height_m)
 
     project = Path(__file__).resolve().parents[2]
     unitree = project / "third_party/unitree_sim_isaaclab"
@@ -150,6 +179,7 @@ def main() -> None:
         import tasks  # noqa: F401
         import sim_tasks.lab_beaker_g1_inspire  # noqa: F401
         from isaaclab_tasks.utils.parse_cfg import parse_env_cfg
+        from isaaclab.utils.math import matrix_from_quat
 
         task_id = "Isaac-PickPlace-LabBeaker-G129-Inspire-Right"
         # Isaac Sim 5.0's GUI path passes an Ar.ResolvedPath to a Boost binding
@@ -158,6 +188,7 @@ def main() -> None:
         omni.usd.is_usd_crate_file_version_supported = lambda _path: True
         print("[sim-smoke] registered", file=sys.stderr, flush=True)
         cfg = parse_env_cfg(task_id, device=args.device, num_envs=1)
+        cfg.scene.robot.spawn.activate_contact_sensors = True
         cfg.viewer.eye = (2.2, 2.2, 1.8)
         cfg.viewer.lookat = (-0.25, 0.45, 1.05)
         print("[sim-smoke] config parsed", file=sys.stderr, flush=True)
@@ -179,6 +210,13 @@ def main() -> None:
                 default_state[:, :3] = torch.tensor(
                     args.object_fixed_xyz, device=env.device
                 )
+            elif replay_plan is not None:
+                root_pose = env.scene["robot"].data.root_pose_w[0]
+                root_rotation = matrix_from_quat(root_pose[3:7].unsqueeze(0))[0]
+                object_base = torch.tensor(
+                    replay_plan["object_xyz_base"], device=env.device, dtype=root_pose.dtype
+                )
+                default_state[:, :3] = root_pose[:3] + root_rotation @ object_base
             elif args.nearby_ik_test:
                 default_state[:, :3] = torch.tensor(
                     [-0.040, 0.380, 0.860], device=env.device
@@ -226,7 +264,7 @@ def main() -> None:
         from isaaclab.markers import VisualizationMarkers
         from isaaclab.markers.config import FRAME_MARKER_CFG, SPHERE_MARKER_CFG
         from isaaclab.utils.math import (
-            compute_pose_error, matrix_from_quat, quat_from_matrix, quat_inv,
+            compute_pose_error, quat_from_matrix, quat_inv,
             quat_slerp, subtract_frame_transforms,
         )
         from .sim_action import RIGHT_ARM_JOINTS, compact_to_isaac_action
@@ -386,6 +424,34 @@ def main() -> None:
                     f"grasp={grasp_pos.cpu().tolist()} object={object_center.cpu().tolist()}",
                     file=sys.stderr, flush=True,
                 )
+            elif replay_plan is not None:
+                root_pose = robot.data.root_pose_w[0]
+                root_rotation = matrix_from_quat(root_pose[3:7].unsqueeze(0))[0]
+
+                def replay_pose(name):
+                    pose_base = torch.tensor(
+                        replay_plan[name], device=env.device, dtype=root_pose.dtype
+                    )
+                    position = root_pose[:3] + root_rotation @ pose_base[:3, 3]
+                    rotation = root_rotation @ pose_base[:3, :3]
+                    return position, quat_from_matrix(rotation.unsqueeze(0))[0]
+
+                pregrasp_pos, grasp_quat = replay_pose("T_base_pregrasp")
+                grasp_pos, grasp_quat = replay_pose("T_base_grasp")
+                lift_pos, _ = replay_pose("T_base_lift")
+                hand_target = args.hand_closure_scale * np.asarray(
+                    replay_plan["hand_target_rad"], dtype=np.float32
+                )
+                hug_distance = float(torch.linalg.vector_norm(grasp_pos - object_center))
+                planning_valid = True
+                planning_failure = None
+                selected_hug_candidate = "real_rgbd_replay"
+                print(
+                    f"[real-plan replay] object={object_center.cpu().tolist()} "
+                    f"pregrasp={pregrasp_pos.cpu().tolist()} grasp={grasp_pos.cpu().tolist()} "
+                    f"lift={lift_pos.cpu().tolist()}",
+                    file=sys.stderr, flush=True,
+                )
             elif args.use_hug and args.auto_collect:
                 from .hug_bridge import run_hug_capture
                 hug_candidates = run_hug_capture(
@@ -498,7 +564,9 @@ def main() -> None:
             # hand's initial position.  The latter can put the pre-grasp on the
             # object side of a bad/noisy grasp and make the open hand collide
             # with the object before executing the final approach.
-            if args.nearby_ik_test:
+            if replay_plan is not None:
+                pass
+            elif args.nearby_ik_test:
                 pregrasp_pos = torch.lerp(start_pos, grasp_pos, 0.5)
             else:
                 retreat_direction = grasp_pos - object_center
@@ -510,7 +578,8 @@ def main() -> None:
                     retreat_norm = torch.linalg.vector_norm(retreat_direction)
                 retreat_direction = retreat_direction / torch.clamp(retreat_norm, min=1e-6)
                 pregrasp_pos = grasp_pos + max(0.0, args.pregrasp_offset_m) * retreat_direction
-            lift_pos = grasp_pos + torch.tensor([0.0, 0.0, 0.12], device=env.device)
+            if replay_plan is None:
+                lift_pos = grasp_pos + torch.tensor([0.0, 0.0, 0.12], device=env.device)
             endpoint_probes = None
             if xr_probe_ik is not None:
                 probe_q = np.r_[
@@ -524,7 +593,10 @@ def main() -> None:
                     "grasp", grasp_pos, grasp_quat, probe_q
                 )
                 endpoint_probes = {"pregrasp": pregrasp_probe, "grasp": grasp_probe}
-            within_coarse_workspace = hug_distance <= 0.35 if args.use_hug and args.auto_collect else True
+            within_coarse_workspace = (
+                hug_distance <= 0.35 if (args.use_hug and args.auto_collect) or replay_plan is not None
+                else True
+            )
             print(
                 "[HUG target] "
                 f"episode={index:06d} xyz={grasp_pos.cpu().tolist()} "
@@ -596,8 +668,16 @@ def main() -> None:
             result = EpisodeWriter(root, current_index, {
                 "instruction": f"用右手抓起{args.object_shape}并抬升",
                 "robot_type": "unitree_g1_right_inspire_rh56dftp",
-                "source": "isaac_rgbd_hug_mano_diff_ik" if args.use_hug else "isaac_object_pose_diff_ik",
+                "source": (
+                    "real_rgbd_hug_replayed_in_isaac"
+                    if replay_plan is not None else
+                    "isaac_rgbd_hug_mano_diff_ik" if args.use_hug else
+                    "isaac_object_pose_diff_ik"
+                ),
                 "fps": 30,
+                "table_top_height_m": args.table_top_height_m,
+                "waypoint_tolerance_m": args.waypoint_tolerance_m,
+                "real_plan": str(args.replay_real_plan.resolve()) if args.replay_real_plan else None,
             })
             episode_index += 1
             return result, current_index
@@ -617,6 +697,8 @@ def main() -> None:
           initial_object_xyz = env.scene["object"].data.root_pos_w[0].cpu().tolist()
           initial_hand_z = float(robot.data.body_pos_w[0, right_hand_index, 2])
           stability_samples = []
+          clearance_samples = []
+          right_arm_contact_force_max_n = 0.0
           episode_start_step = 0
           motion_phase = 0 if plan["planning_valid"] else cycle_steps - 1
           waypoint_wait_steps = 0
@@ -746,6 +828,17 @@ def main() -> None:
             action = torch.tensor(expanded, device=env.device).unsqueeze(0)
             with contextlib.redirect_stdout(sink):
                 observation, *_ = env.step(action)
+            non_finger_right_ids = [right_hand_index, *arm_joint_body_ids]
+            body_heights = robot.data.body_pos_w[0, non_finger_right_ids, 2]
+            clearance_samples.append(float(body_heights.min()) - args.table_top_height_m)
+            contact_forces = getattr(robot.data, "net_contact_forces_w", None)
+            if contact_forces is not None:
+                right_arm_contact_force_max_n = max(
+                    right_arm_contact_force_max_n,
+                    float(torch.linalg.vector_norm(
+                        contact_forces[0, non_finger_right_ids], dim=1
+                    ).max()),
+                )
             if pregrasp_end <= phase < grasp_end and phase not in approach_recorded_phases:
                 approach_recorded_phases.add(phase)
                 actual_after = robot.data.body_pos_w[0, right_hand_index]
@@ -834,6 +927,10 @@ def main() -> None:
                         "failure_category": plan["failure_category"],
                         "approach_diagnostics": approach_diagnostics,
                         "endpoint_ik_probes": plan["endpoint_ik_probes"],
+                        "table_top_height_m": args.table_top_height_m,
+                        "min_right_arm_body_origin_clearance_m": min(clearance_samples),
+                        "max_nonfinger_right_arm_contact_force_n": right_arm_contact_force_max_n,
+                        "waypoint_tolerance_m": args.waypoint_tolerance_m,
                     }
                     checks = {
                         "planning_valid": bool(plan["planning_valid"]),
@@ -841,6 +938,9 @@ def main() -> None:
                         "finger_distance_le_0.10m": metrics["max_finger_distance_m"] <= 0.10,
                         "linear_speed_le_0.15mps": metrics["max_linear_speed_mps"] <= 0.15,
                         "angular_speed_le_1.0radps": metrics["max_angular_speed_radps"] <= 1.0,
+                        "nonfinger_contact_force_le_5n": (
+                            metrics["max_nonfinger_right_arm_contact_force_n"] <= 5.0
+                        ),
                     }
                 metrics["checks"] = checks
                 status = "success" if all(checks.values()) else "failed"
@@ -873,6 +973,8 @@ def main() -> None:
                     initial_hand_z = float(robot.data.body_pos_w[0, right_hand_index, 2])
                     arm_command = torch.tensor(arm_default, device=env.device)
                     stability_samples.clear()
+                    clearance_samples.clear()
+                    right_arm_contact_force_max_n = 0.0
                     episode_start_step = step + 1
                     motion_phase = 0
                     waypoint_wait_steps = 0
@@ -909,9 +1011,9 @@ def main() -> None:
             ))
             gate = None
             if phase == pregrasp_end - 1:
-                gate = ("pre-grasp", 0.04, 100)
+                gate = ("pre-grasp", args.waypoint_tolerance_m, 100)
             elif phase == grasp_end - 1:
-                gate = ("grasp", 0.04, 100)
+                gate = ("grasp", args.waypoint_tolerance_m, 100)
             if gate is not None and measured_error > gate[1]:
                 if waypoint_wait_steps < gate[2]:
                     waypoint_wait_steps += 1

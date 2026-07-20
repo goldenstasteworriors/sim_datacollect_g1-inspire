@@ -21,6 +21,10 @@ def _beaker_path() -> str:
     return str(Path(__file__).resolve().parents[2] / "assets/labutopia/Beaker_01.usd")
 
 
+def _table_top_height() -> float:
+    return float(os.environ.get("LAB_TABLE_TOP_HEIGHT_M", "0.70"))
+
+
 @configclass
 class LabBeakerSceneCfg(ObjectTableSceneCfg):
     """保留 Unitree 官方 G1+Inspire 本体、相机和桌面，仅替换抓取物。"""
@@ -38,6 +42,32 @@ class LabBeakerSceneCfg(ObjectTableSceneCfg):
         spawn=sim_utils.GroundPlaneCfg(),
     )
 
+    # Collision-enabled horizontal slab whose top surface is the configured
+    # real-table height. A simple primitive makes the safety boundary visually
+    # obvious and avoids relying on the opaque PackingTable USD dimensions.
+    packing_table = AssetBaseCfg(
+        prim_path="/World/envs/env_.*/PackingTable",
+        init_state=AssetBaseCfg.InitialStateCfg(
+            pos=(0.0, 0.55, _table_top_height() - 0.02),
+            rot=(1.0, 0.0, 0.0, 0.0),
+        ),
+        spawn=sim_utils.CuboidCfg(
+            size=(1.20, 0.80, 0.04),
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True),
+            collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=True),
+            visual_material=sim_utils.PreviewSurfaceCfg(
+                diffuse_color=(0.20, 0.65, 0.78), roughness=0.65
+            ),
+            physics_material=sim_utils.RigidBodyMaterialCfg(
+                friction_combine_mode="max",
+                restitution_combine_mode="min",
+                static_friction=1.2,
+                dynamic_friction=1.0,
+                restitution=0.0,
+            ),
+        ),
+    )
+
     front_camera = CameraPresets.g1_front_camera()
     front_camera.data_types = ["rgb", "distance_to_image_plane"]
 
@@ -45,7 +75,7 @@ class LabBeakerSceneCfg(ObjectTableSceneCfg):
         object = RigidObjectCfg(
             prim_path="/World/envs/env_.*/Object",
             init_state=RigidObjectCfg.InitialStateCfg(
-                pos=(-0.06, 0.36, 0.82), rot=(1.0, 0.0, 0.0, 0.0)
+                pos=(-0.06, 0.36, _table_top_height() + 0.025), rot=(1.0, 0.0, 0.0, 0.0)
             ),
             spawn=sim_utils.CuboidCfg(
                 size=(0.035, 0.035, 0.05),
@@ -74,7 +104,7 @@ class LabBeakerSceneCfg(ObjectTableSceneCfg):
         object = RigidObjectCfg(
             prim_path="/World/envs/env_.*/Object",
             init_state=RigidObjectCfg.InitialStateCfg(
-                pos=(-0.06, 0.36, 0.845), rot=(1.0, 0.0, 0.0, 0.0)
+                pos=(-0.06, 0.36, _table_top_height() + 0.025), rot=(1.0, 0.0, 0.0, 0.0)
             ),
             spawn=sim_utils.SphereCfg(
                 radius=0.025,
@@ -101,7 +131,7 @@ class LabBeakerSceneCfg(ObjectTableSceneCfg):
         object = RigidObjectCfg(
             prim_path="/World/envs/env_.*/Object",
             init_state=RigidObjectCfg.InitialStateCfg(
-                pos=(-0.06, 0.36, 0.86), rot=(1.0, 0.0, 0.0, 0.0)
+                pos=(-0.06, 0.36, _table_top_height() + 0.04), rot=(1.0, 0.0, 0.0, 0.0)
             ),
             spawn=sim_utils.CylinderCfg(
                 radius=0.02,
@@ -129,7 +159,7 @@ class LabBeakerSceneCfg(ObjectTableSceneCfg):
         object = RigidObjectCfg(
             prim_path="/World/envs/env_.*/Object",
             init_state=RigidObjectCfg.InitialStateCfg(
-                pos=(-0.06, 0.36, 0.82), rot=(1.0, 0.0, 0.0, 0.0)
+                pos=(-0.06, 0.36, _table_top_height()), rot=(1.0, 0.0, 0.0, 0.0)
             ),
             spawn=sim_utils.UsdFileCfg(
                 usd_path=_beaker_path(),

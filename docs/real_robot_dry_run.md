@@ -5,7 +5,7 @@
 1. 机器人计算机只运行 RealSense RGB-D 发布服务；
 2. 本机接收一帧对齐后的 RGB、16 位深度和相机内参；
 3. 用户在保存的 RGB 上指定瓶子像素；
-4. HUG 生成相机系 Inspire 抓取位姿，标定外参将其变换到 G1 base；
+4. HUG 生成相机系 Inspire 抓取位姿，官方 G1 腰部/相机 FK 将其变换到 pelvis；
 5. 离线 IK 生成 `current → pregrasp → grasp → close → lift` 轨迹；
 6. 结果只保存为 NPZ/JSON/PNG，不发送 DDS 或电机命令。
 
@@ -13,7 +13,8 @@
 
 - 相机协议与只读客户端：`src/lab_g1_collect/real_camera.py`
 - 机器人端无损 RGB-D 服务：`src/lab_g1_collect/real_camera_server.py`
-- HUG、外参、IK 和 dry-run 输出：`src/lab_g1_collect/real_grasp.py`
+- HUG、坐标变换、IK 和 dry-run 输出：`src/lab_g1_collect/real_grasp.py`
+- 官方 G1 相机链 FK：`src/lab_g1_collect/g1_camera_geometry.py`
 - LowState SSH 客户端：`src/lab_g1_collect/real_state.py`
 - SONIC SDK 只读状态工具：`tools/g1_state_reader/`
 - 安全与规划配置：`configs/real_robot_dry_run.yaml`
@@ -84,26 +85,27 @@ lab-g1-real --capture-only \
 "has_metric_depth": true
 ```
 
-## 3. 标定前置条件
+## 3. 官方相机与腰部 FK
 
-规划必须使用真实的 `T_base_camera`。它是 4×4 刚体变换，前三列/行描述相机光学轴
-相对规划基座的旋转，最后一列前三项描述相机光心相对规划基座的 XYZ 平移（米）。
-定义为把相机光学坐标系中的点变换到 G1 base 坐标系：
+本项目不再要求另做 `T_base_camera` 标定。固定几何来自 NVIDIA 官方
+GR00T-WholeBodyControl 的
+`gear_sonic/data/robot_model/model_data/g1/g1_29dof_with_hand.xml`：
+
+- `pelvis -> waist_yaw_link`：绕 Z 的 `waist_yaw_joint`；
+- `waist_roll_link pos="-0.0039635 0 0.035"`，绕 X；
+- `torso_link pos="0 0 0.019"`，绕 Y；
+- `head_camera pos="0.06 0 0.45" euler="0 -0.8 -1.57"`。
+
+RealSense 使用光学坐标 `+X right, +Y down, +Z forward`；MuJoCo camera 使用
+`+X right, +Y up, -Z forward`，代码显式转换二者。最终定义为：
 
 ```text
-p_base = T_base_camera @ p_camera
+p_pelvis = T_pelvis_camera_optical(waist_yaw, waist_roll, waist_pitch) @ p_camera
 ```
 
-完成手眼/外参标定并复核坐标轴、米制单位后，把矩阵填入
-`configs/real_robot_dry_run.yaml`，再把 `calibration.valid` 改为 `true`。默认配置使用
-占位单位阵并保持 `valid: false`；程序会拒绝规划，防止把占位外参误当成真机外参。
-
-本机 RealSense 安装在 torso 上，而当前 IK 模型的 base 是固定基座/骨盆模型。因此严格
-来说 `T_base_camera` 还受三个腰关节影响：相机相对 torso 的安装外参是常量，
-torso 相对 pelvis 的变换随腰部状态变化。SONIC 仿真模型中的 head camera
-`pos="0.06 0 0.45" euler="0 -0.8 -1.57"` 只能作为初始猜测，不能替代实物标定。
-在实现动态 FK 前，标定和 dry-run 必须保持同一腰部姿态；自动 LowState 读取已经同时
-记录腰部 `12~14` 三个关节，便于做这个门禁。
+自动 LowState 会同时读取腰部硬件索引 `12~14`，因此新抓图默认使用同一时刻的腰姿态。
+复现历史 `capture.npz` 时必须用 `--waist-q YAW ROLL PITCH` 提供捕获时状态；若未知，
+只能像仿真评审一样明确记录姿态假设，不能将结果用于真机。
 
 ## 4. 生成抓瓶计划
 
@@ -128,9 +130,29 @@ lab-g1-real \
 `dry_run_plan.npz` 不是 Unitree/DFX 的硬件命令，不能直接发布。尤其 Inspire 真机接口
 使用的 0~1 开合语义与这里的 URDF 弧度不同；本 dry-run 路径刻意不包含转换器或发布器。
 
+若独立 URDF IK 或真机速度门槛不通过，但需要把候选送入 Isaac 继续诊断，可添加
+`--simulation-review`。输出会保留 `simulation_review_only=true`、失败阶段和超限值；
+这种计划只允许传给 `sim_smoke --replay-real-plan`，不能用于真机。
+
 ## 5. 当前尚不能省略的实机信息
 
-- 实际安装后的 `T_base_camera` 外参；
 - 瓶身上有效深度像素。
+- 与 RGB-D 同时刻的腰部与右臂 LowState。
 
-缺少其中任一项时，只进行 `--capture-only` 检查，不应把生成的位姿用于真机执行。
+缺少其中任一项时，不应把生成的位姿用于真机执行。
+
+## 6. 真实计划只在 Isaac 中回放
+
+仿真桌板默认是带碰撞的 `1.20 x 0.80 x 0.04 m` 水平板，上表面严格位于 `0.70 m`：
+
+```bash
+PYTHONPATH="$PWD/src:$PYTHONPATH" conda run --no-capture-output -n unitree_sim_env \
+python -m lab_g1_collect.sim_smoke --device cpu --headless --auto-collect \
+  --steps 900 --episodes 1 --object-shape cylinder --table-top-height-m 0.70 \
+  --replay-real-plan outputs/real_robot_dry_run/bottle_plan/dry_run_plan.npz \
+  --arm-ik xr_teleoperate --xr-ik-profile autonomous \
+  --output outputs/real_bottle_sim_review
+```
+
+episode 元数据会额外保存桌高、非手指右臂最大接触力和右臂连杆原点最低桌面净空。
+默认 40 mm 到点门槛不变；`--waypoint-tolerance-m` 只用于仿真敏感性复核。
