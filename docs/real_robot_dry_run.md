@@ -14,6 +14,8 @@
 - 相机协议与只读客户端：`src/lab_g1_collect/real_camera.py`
 - 机器人端无损 RGB-D 服务：`src/lab_g1_collect/real_camera_server.py`
 - HUG、外参、IK 和 dry-run 输出：`src/lab_g1_collect/real_grasp.py`
+- LowState SSH 客户端：`src/lab_g1_collect/real_state.py`
+- SONIC SDK 只读状态工具：`tools/g1_state_reader/`
 - 安全与规划配置：`configs/real_robot_dry_run.yaml`
 
 ## 1. 环境准备
@@ -36,6 +38,22 @@ PYTHONPATH=/机器人上的/sim_data_collect/src \
 ```
 
 这个服务只打开 RealSense 和 TCP 端口，不导入或访问机器人 DDS。
+
+机器人端还需要用 SONIC 自带的官方 Unitree SDK 编译一次只读 LowState 工具：
+
+```bash
+cd /home/unitree/data_collection/sim_data_collect
+cmake -S tools/g1_state_reader -B outputs/real_robot_tools/build \
+  -DSONIC_ROOT=/home/unitree/data_collection/GR00T-WholeBodyControl \
+  -DCMAKE_BUILD_TYPE=Release
+cmake --build outputs/real_robot_tools/build --target g1_read_lowstate -j2
+cp outputs/real_robot_tools/build/g1_read_lowstate \
+  outputs/real_robot_tools/g1_read_lowstate
+```
+
+该工具只包含 `ChannelSubscriber<LowState_>`，从 `rt/lowstate` 读取右臂硬件索引
+`22~28` 和腰部索引 `12~14`，不包含 publisher。`lab-g1-real` 默认通过 SSH 别名
+`g1_bjutech` 调用它；只有离线复现实验才需要用 `--right-arm-q` 覆盖自动读数。
 
 如果只想先确认官方服务的 RGB 连通性，也可以运行：
 
@@ -68,8 +86,9 @@ lab-g1-real --capture-only \
 
 ## 3. 标定前置条件
 
-规划必须使用真实的 `T_base_camera`，定义为把相机光学坐标系中的点变换到 G1 base
-坐标系：
+规划必须使用真实的 `T_base_camera`。它是 4×4 刚体变换，前三列/行描述相机光学轴
+相对规划基座的旋转，最后一列前三项描述相机光心相对规划基座的 XYZ 平移（米）。
+定义为把相机光学坐标系中的点变换到 G1 base 坐标系：
 
 ```text
 p_base = T_base_camera @ p_camera
@@ -79,17 +98,23 @@ p_base = T_base_camera @ p_camera
 `configs/real_robot_dry_run.yaml`，再把 `calibration.valid` 改为 `true`。默认配置使用
 占位单位阵并保持 `valid: false`；程序会拒绝规划，防止把占位外参误当成真机外参。
 
+本机 RealSense 安装在 torso 上，而当前 IK 模型的 base 是固定基座/骨盆模型。因此严格
+来说 `T_base_camera` 还受三个腰关节影响：相机相对 torso 的安装外参是常量，
+torso 相对 pelvis 的变换随腰部状态变化。SONIC 仿真模型中的 head camera
+`pos="0.06 0 0.45" euler="0 -0.8 -1.57"` 只能作为初始猜测，不能替代实物标定。
+在实现动态 FK 前，标定和 dry-run 必须保持同一腰部姿态；自动 LowState 读取已经同时
+记录腰部 `12~14` 三个关节，便于做这个门禁。
+
 ## 4. 生成抓瓶计划
 
-先从 `rgb.png` 读取瓶身内部一个有有效深度的像素 `(u, v)`。再提供机器人当前右臂
-7 个关节角，顺序与 `configs/pipeline.yaml` 的 `arm_joint_names` 相同：
+先从 `rgb.png` 读取瓶身内部一个有有效深度的像素 `(u, v)`。当前右臂 7 个关节角会
+自动从 SONIC 同款 `rt/lowstate` 订阅读取：
 
 ```bash
 conda activate unitree_sim_env
 lab-g1-real \
   --capture outputs/real_robot_dry_run/check_camera/capture.npz \
   --target-u <u> --target-v <v> \
-  --right-arm-q <q1> <q2> <q3> <q4> <q5> <q6> <q7> \
   --output outputs/real_robot_dry_run/bottle_plan
 ```
 
@@ -106,7 +131,6 @@ lab-g1-real \
 ## 5. 当前尚不能省略的实机信息
 
 - 实际安装后的 `T_base_camera` 外参；
-- 抓图时右臂 7 关节状态；
 - 瓶身上有效深度像素。
 
 缺少其中任一项时，只进行 `--capture-only` 检查，不应把生成的位姿用于真机执行。

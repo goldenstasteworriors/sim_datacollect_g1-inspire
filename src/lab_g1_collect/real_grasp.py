@@ -14,6 +14,7 @@ from PIL import Image, ImageDraw
 from .arm_ik import solve_right_arm_ik
 from .hug_bridge import run_hug_capture
 from .real_camera import CameraClient, CameraFrame
+from .real_state import read_g1_arm_state
 from .trajectory import smoothstep
 
 
@@ -143,7 +144,7 @@ def _generate_dry_run_trajectory(
 
 def _plan(
     *, project: Path, frame: CameraFrame, config: dict[str, Any], output: Path,
-    u: float, v: float, right_arm_q: np.ndarray,
+    u: float, v: float, right_arm_q: np.ndarray, right_arm_source: str,
 ) -> dict[str, Any]:
     if not frame.has_metric_depth:
         raise ValueError(
@@ -220,6 +221,7 @@ def _plan(
         T_base_lift=lift_base,
         object_xyz_base=object_base,
         hand_target_rad=hand_target,
+        current_right_arm_q=np.asarray(right_arm_q, dtype=np.float32),
     )
     preview = Image.fromarray(frame.rgb)
     draw = ImageDraw.Draw(preview)
@@ -234,6 +236,8 @@ def _plan(
         "target_uv_full": [float(u), float(v)],
         "target_depth_m": depth,
         "object_xyz_base": object_base.tolist(),
+        "current_right_arm_q": np.asarray(right_arm_q, dtype=float).tolist(),
+        "current_right_arm_source": right_arm_source,
         "trajectory_shape": list(trajectory.shape),
         "max_arm_speed_rad_s": max_arm_speed,
         "hand_command_semantics": "Inspire URDF radians; not a hardware command",
@@ -258,7 +262,11 @@ def main() -> None:
     parser.add_argument("--capture-only", action="store_true")
     parser.add_argument("--target-u", type=float)
     parser.add_argument("--target-v", type=float)
-    parser.add_argument("--right-arm-q", type=float, nargs=7, metavar=("Q1", "Q2", "Q3", "Q4", "Q5", "Q6", "Q7"))
+    parser.add_argument(
+        "--right-arm-q", type=float, nargs=7,
+        metavar=("Q1", "Q2", "Q3", "Q4", "Q5", "Q6", "Q7"),
+        help="可选离线覆盖；默认通过 SSH 从 rt/lowstate 自动读取",
+    )
     args = parser.parse_args()
 
     if CONTROL_OUTPUT_ENABLED:
@@ -294,7 +302,25 @@ def main() -> None:
     if args.target_u is None or args.target_v is None:
         raise SystemExit("规划时必须用 --target-u/--target-v 指定瓶子上的像素")
     if args.right_arm_q is None:
-        raise SystemExit("规划时必须用 --right-arm-q 提供当前右臂 7 个关节角（弧度）")
+        arm_state = read_g1_arm_state(config["robot_state"])
+        right_arm_q = arm_state.q
+        right_arm_source = arm_state.source
+        print(
+            json.dumps(
+                {
+                    "lowstate_source": arm_state.source,
+                    "right_arm_q": arm_state.q.tolist(),
+                    "right_arm_dq": arm_state.dq.tolist(),
+                    "waist_q": arm_state.waist_q.tolist(),
+                    "mode_machine": arm_state.mode_machine,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+    else:
+        right_arm_q = np.asarray(args.right_arm_q)
+        right_arm_source = "cli_override"
     metadata = _plan(
         project=Path(__file__).resolve().parents[2],
         frame=frame,
@@ -302,7 +328,8 @@ def main() -> None:
         output=output,
         u=args.target_u,
         v=args.target_v,
-        right_arm_q=np.asarray(args.right_arm_q),
+        right_arm_q=right_arm_q,
+        right_arm_source=right_arm_source,
     )
     print(json.dumps(metadata, ensure_ascii=False, indent=2))
 

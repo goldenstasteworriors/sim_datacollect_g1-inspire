@@ -8,6 +8,14 @@ camera:
   timeout_s: 10.0
   protocol: lab-g1-rgbd-v1
 
+robot_state:
+  ssh_host: g1_bjutech
+  sonic_root: /home/unitree/data_collection/GR00T-WholeBodyControl
+  remote_reader: /home/unitree/data_collection/sim_data_collect/outputs/real_robot_tools/g1_read_lowstate
+  network_interface: eth0
+  timeout_s: 3.0
+  max_abs_dq_rad_s: 1.0
+
 calibration:
   # 必须完成实际相机到 G1 base 的手眼外参标定后才能改为 true。
   valid: false
