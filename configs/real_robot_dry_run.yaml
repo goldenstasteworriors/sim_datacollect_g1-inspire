@@ -1,0 +1,33 @@
+safety:
+  mode: dry_run
+  allow_control: false
+
+camera:
+  host: null
+  port: 5555
+  timeout_s: 10.0
+  protocol: lab-g1-rgbd-v1
+
+calibration:
+  # 必须完成实际相机到 G1 base 的手眼外参标定后才能改为 true。
+  valid: false
+  T_base_camera:
+    - [1.0, 0.0, 0.0, 0.0]
+    - [0.0, 1.0, 0.0, 0.0]
+    - [0.0, 0.0, 1.0, 0.0]
+    - [0.0, 0.0, 0.0, 1.0]
+
+task:
+  object_name: bottle
+  pregrasp_offset_m: 0.03
+  lift_offset_base_m: [0.0, 0.0, 0.10]
+
+planner:
+  episode_index: 0
+  hug_sampling_steps: 5
+  hug_candidates: 8
+  fps: 30
+  duration_s: 6.0
+  # current->pregrasp, pregrasp->grasp, close, lift
+  phase_ratios: [0.45, 0.20, 0.15, 0.20]
+  max_arm_speed_rad_s: 0.35

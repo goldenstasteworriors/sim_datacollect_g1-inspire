@@ -152,9 +152,10 @@ def run_hug_capture(
     *, project: Path, episode_index: int, rgb: np.ndarray, depth_m: np.ndarray,
     K: np.ndarray, point_uv_224: tuple[float, float], object_name: str = "beaker",
     sampling_steps: int = 5, candidates: int = 8, debug_stride: int = 10,
-    return_candidates: bool = False,
+    return_candidates: bool = False, run_root: Path | None = None,
 ):
-    run_dir = project / "outputs" / "hug_runtime" / f"episode_{episode_index:06d}"
+    runtime_root = run_root if run_root is not None else project / "outputs" / "hug_runtime"
+    run_dir = runtime_root / f"episode_{episode_index:06d}"
     dataset = run_dir / "dataset"
     dataset.mkdir(parents=True, exist_ok=True)
     capture = run_dir / "capture.npz"
