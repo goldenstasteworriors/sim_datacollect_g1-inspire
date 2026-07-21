@@ -19,3 +19,6 @@ add_subdirectory("${UNITREE_SDK_ROOT}" unitree_sdk2_build EXCLUDE_FROM_ALL)
 
 add_executable(g1_read_lowstate main.cpp)
 target_link_libraries(g1_read_lowstate PRIVATE unitree_sdk2)
+
+add_executable(g1_initialize_upper_body initialize_upper_body.cpp)
+target_link_libraries(g1_initialize_upper_body PRIVATE unitree_sdk2)

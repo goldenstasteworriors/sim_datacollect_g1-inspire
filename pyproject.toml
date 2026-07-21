@@ -15,6 +15,7 @@ real = ["msgpack>=1.0", "pyzmq>=25"]
 [project.scripts]
 lab-g1 = "lab_g1_collect.cli:main"
 lab-g1-real = "lab_g1_collect.real_grasp:main"
+lab-g1-init-plan = "lab_g1_collect.real_initialize:main"
 lab-g1-rgbd-server = "lab_g1_collect.real_camera_server:main"
 
 [tool.setuptools.packages.find]

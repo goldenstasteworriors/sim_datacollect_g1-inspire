@@ -18,6 +18,9 @@ constexpr const char* kTopic = "rt/lowstate";
 constexpr const char* kPrefix = "G1_LOWSTATE_JSON ";
 constexpr std::array<int, 7> kRightArmIndices = {22, 23, 24, 25, 26, 27, 28};
 constexpr std::array<int, 3> kWaistIndices = {12, 13, 14};
+constexpr std::array<int, 29> kBodyIndices = {
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
+    15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28};
 
 template <typename MotorContainer, std::size_t N>
 void PrintMotorField(
@@ -91,6 +94,10 @@ int main(int argc, char** argv) {
   PrintMotorField(motors, kWaistIndices, false);
   std::cout << ",\"waist_dq\":";
   PrintMotorField(motors, kWaistIndices, true);
+  std::cout << ",\"body_q\":";
+  PrintMotorField(motors, kBodyIndices, false);
+  std::cout << ",\"body_dq\":";
+  PrintMotorField(motors, kBodyIndices, true);
   std::cout << "}" << std::endl;
   return 0;
 }

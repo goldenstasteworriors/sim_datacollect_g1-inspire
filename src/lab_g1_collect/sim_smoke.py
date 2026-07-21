@@ -92,6 +92,10 @@ def main() -> None:
         help="碰撞桌板上表面的世界坐标高度，默认与真实桌面一致为0.76 m",
     )
     parser.add_argument(
+        "--initial-pose", choices=("sonicmj", "asset-default"), default="sonicmj",
+        help="机器人 reset 姿态；默认使用 SONICMJ/GEAR-SONIC 的 29DoF 初始姿态",
+    )
+    parser.add_argument(
         "--replay-real-plan", type=Path,
         help="回放 real_grasp 生成的 dry_run_plan.npz；只在 Isaac 仿真内执行",
     )
@@ -188,6 +192,10 @@ def main() -> None:
         omni.usd.is_usd_crate_file_version_supported = lambda _path: True
         print("[sim-smoke] registered", file=sys.stderr, flush=True)
         cfg = parse_env_cfg(task_id, device=args.device, num_envs=1)
+        if args.initial_pose == "sonicmj":
+            from .initial_pose import SONICMJ_INITIAL_JOINT_POS
+
+            cfg.scene.robot.init_state.joint_pos.update(SONICMJ_INITIAL_JOINT_POS)
         cfg.scene.robot.spawn.activate_contact_sensors = True
         cfg.viewer.eye = (2.2, 2.2, 1.8)
         cfg.viewer.lookat = (-0.25, 0.45, 1.05)
@@ -274,6 +282,14 @@ def main() -> None:
         import numpy as np
 
         arm_default = np.array([default_pos[joint_names.index(name)] for name in RIGHT_ARM_JOINTS], dtype=np.float32)
+        initial_right_arm_q = robot.data.joint_pos[0, [
+            joint_names.index(name) for name in RIGHT_ARM_JOINTS
+        ]].cpu().numpy().copy()
+        print(
+            f"[sim-smoke] initial_pose={args.initial_pose} "
+            f"right_arm_q={initial_right_arm_q.tolist()}",
+            file=sys.stderr, flush=True,
+        )
         pregrasp_end = 150
         grasp_end = 300
         close_end = 400
@@ -714,6 +730,8 @@ def main() -> None:
                 ),
                 "fps": 30,
                 "table_top_height_m": args.table_top_height_m,
+                "initial_pose": args.initial_pose,
+                "initial_right_arm_q": initial_right_arm_q.tolist(),
                 "waypoint_tolerance_m": args.waypoint_tolerance_m,
                 "real_plan": str(args.replay_real_plan.resolve()) if args.replay_real_plan else None,
             })

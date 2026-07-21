@@ -154,5 +154,38 @@ python -m lab_g1_collect.sim_smoke --device cpu --headless --auto-collect \
   --output outputs/real_bottle_sim_review
 ```
 
+## 7. SONICMJ 统一初始化姿态
+
+仿真默认使用 SONICMJ `SONIC_G1_DEFAULT_JOINT_POS`：双侧髋俯仰 `-0.312`、
+膝 `0.669`、踝俯仰 `-0.363`，双肘 `0.6`，双肩俯仰 `0.2`，肩横滚左
+`0.2`/右 `-0.2`，其余 29DoF 身体关节为零，Inspire 手保持张开。统一常量在
+`src/lab_g1_collect/initial_pose.py`；`sim_smoke` 可用
+`--initial-pose asset-default` 做旧零位对照。
+
+真机初始化前先重新部署扩展后的只读 LowState 工具，它会额外输出完整 29DoF：
+
+```bash
+cmake -S tools/g1_state_reader -B outputs/real_robot_tools/build \
+  -DSONIC_ROOT=/home/unitree/data_collection/GR00T-WholeBodyControl
+cmake --build outputs/real_robot_tools/build \
+  --target g1_read_lowstate g1_initialize_upper_body -j2
+cp outputs/real_robot_tools/build/g1_read_lowstate \
+  outputs/real_robot_tools/g1_read_lowstate
+```
+
+只生成并检查从实时 LowState 到 SONICMJ 姿态的平滑轨迹，不发布控制：
+
+```bash
+PYTHONPATH="$PWD/src:$PYTHONPATH" conda run --no-capture-output \
+  -n unitree_sim_env python -m lab_g1_collect.real_initialize \
+  --output outputs/real_robot_dry_run/sonicmj_initialization
+```
+
+`g1_initialize_upper_body` 复用宇树官方 `g1_arm7_sdk_dds_example.cpp` 的
+`rt/arm_sdk`、`kp=60`、`kd=1.5` 和权重交接方式。无 `--execute` 时只订阅
+LowState 并打印计划，不创建 publisher；显式执行模式仍需终端输入二次确认。本项目的
+腿部关节目标只用于仿真，真机腿部必须继续由 SONIC/WBC 平衡控制，不允许本工具发布
+`rt/lowcmd`。
+
 episode 元数据会额外保存桌高、非手指右臂最大接触力和右臂连杆原点最低桌面净空。
 默认 40 mm 到点门槛不变；`--waypoint-tolerance-m` 只用于仿真敏感性复核。

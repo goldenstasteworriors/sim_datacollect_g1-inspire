@@ -16,6 +16,13 @@ robot_state:
   timeout_s: 3.0
   max_abs_dq_rad_s: 1.0
 
+initialization:
+  profile: sonicmj
+  fps: 50
+  duration_s: 3.0
+  max_joint_speed_rad_s: 0.35
+  max_measured_speed_rad_s: 0.20
+
 camera_geometry:
   # 使用 NVIDIA GR00T-WholeBodyControl 官方 G1 MJCF 的腰部链和 head_camera
   # 固定位姿；T_pelvis_camera 会随 LowState 的 yaw/roll/pitch 在线计算。

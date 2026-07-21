@@ -294,6 +294,11 @@ dry-run 应改用本项目的 `lab-g1-rgbd-server`，它将深度对齐到彩色
 生成上表面为 `0.76 m` 的碰撞桌板，并记录非手指右臂接触力与桌面净空。首次真实瓶子
 评审结果见 `docs/real_bottle_sim_review_2026-07-20.md`。
 
+机器人 reset 默认采用 SONICMJ/GEAR-SONIC 的 29DoF 初始姿态，而不是 Unitree
+Isaac 资产的全零手臂姿态。真机侧提供同一目标的 LowState dry-run 规划器，以及基于
+宇树官方 `rt/arm_sdk` 示例的双臂+腰初始化工具；腿部始终留给 SONIC/WBC 平衡控制。
+完整安全流程见 `docs/real_robot_dry_run.md`。
+
 ## MANO wrist / Inspire base 交互标定
 
 `tools/retarget_calibrator` 会将当前代码中的 `T_mano_wrist_inspire_base` 固定标定作为

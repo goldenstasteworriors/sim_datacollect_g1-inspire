@@ -32,6 +32,8 @@ class G1ArmState:
     timestamp: float
     mode_machine: int
     source: str
+    body_q: np.ndarray | None = None
+    body_dq: np.ndarray | None = None
 
 
 def _vector(payload: dict[str, Any], key: str, size: int) -> np.ndarray:
@@ -70,6 +72,8 @@ def read_g1_arm_state(config: dict[str, Any]) -> G1ArmState:
     dq = _vector(payload, "right_arm_dq", 7)
     waist_q = _vector(payload, "waist_q", 3)
     waist_dq = _vector(payload, "waist_dq", 3)
+    body_q = _vector(payload, "body_q", 29) if "body_q" in payload else None
+    body_dq = _vector(payload, "body_dq", 29) if "body_dq" in payload else None
     max_abs_dq = float(config.get("max_abs_dq_rad_s", 1.0))
     if float(np.max(np.abs(dq))) > max_abs_dq:
         raise RuntimeError(
@@ -84,4 +88,6 @@ def read_g1_arm_state(config: dict[str, Any]) -> G1ArmState:
         timestamp=float(payload["timestamp"]),
         mode_machine=int(payload["mode_machine"]),
         source=f"{ssh_host}:rt/lowstate[22:29]",
+        body_q=body_q,
+        body_dq=body_dq,
     )
