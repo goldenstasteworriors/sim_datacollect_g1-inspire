@@ -177,10 +177,16 @@ def run_hug_capture(
     if save_debug:
         _save_hug_input_debug(run_dir, rgb, depth_mm, K, point_uv_224, object_name)
     env = os.environ.copy()
+    hf_home = Path(
+        env.get("LAB_HUG_HF_HOME", project / "checkpoints/hug/hf_cache")
+    ).expanduser()
+    runtime_tmp = Path(env.get("LAB_HUG_TMPDIR", project / ".cache/tmp")).expanduser()
+    hf_home.mkdir(parents=True, exist_ok=True)
+    runtime_tmp.mkdir(parents=True, exist_ok=True)
     env.update({
         "PYTHONPATH": f"{project / 'src'}:{project / 'third_party/hug'}",
-        "HF_HOME": str(project / ".cache/huggingface"),
-        "TMPDIR": str(project / ".cache/tmp"),
+        "HF_HOME": str(hf_home),
+        "TMPDIR": str(runtime_tmp),
     })
     mano_dir = Path(env.get("LAB_HUG_MANO_DIR", project / "third_party/hug/assets/mano"))
     if not mano_dir.exists():

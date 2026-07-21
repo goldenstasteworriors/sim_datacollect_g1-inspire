@@ -42,8 +42,9 @@ lab-g1 --config configs/pipeline.yaml doctor
 
 HUG 严格按官方 README 使用独立的 `hug` 环境。MANO 默认从
 `~/commonly_used/mano_v1_2/models` 读取，不复制或提交许可文件；可用
-`LAB_HUG_MANO_DIR` 覆盖。HUG 权重放在
-`checkpoints/hug/hug_full.safetensors`。
+`LAB_HUG_MANO_DIR` 覆盖（既可指向 `mano_v1_2`，也可指向其 `models`
+子目录）。HUG 权重放在 `checkpoints/hug/hug_full.safetensors`，DINOv2
+缓存默认放在 `checkpoints/hug/hf_cache`，可用 `LAB_HUG_HF_HOME` 覆盖。
 
 ## 快速验证
 

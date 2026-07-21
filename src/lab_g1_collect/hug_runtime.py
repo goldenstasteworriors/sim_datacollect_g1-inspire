@@ -29,7 +29,17 @@ def main() -> None:
     if mano_dir:
         from hug.utils import data_keys
 
-        data_keys.MANO_MODELS_FOLDER = Path(mano_dir).expanduser().resolve()
+        mano_root = Path(mano_dir).expanduser().resolve()
+        # The pipeline config points at the directory containing MANO_RIGHT.pkl,
+        # while manotorch expects its parent and appends ``models`` internally.
+        # Accept both conventions so the same setting works for doctor and HUG.
+        if (mano_root / "MANO_RIGHT.pkl").is_file():
+            mano_root = mano_root.parent
+        if not (mano_root / "models/MANO_RIGHT.pkl").is_file():
+            raise FileNotFoundError(
+                f"LAB_HUG_MANO_DIR does not contain models/MANO_RIGHT.pkl: {mano_root}"
+            )
+        data_keys.MANO_MODELS_FOLDER = mano_root
     from hug.inference import main as infer
     from hug.prepare_inputs import prepare_pkl
     from hug.utils.pcl_utils import pixel_to_xyz
