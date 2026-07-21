@@ -173,7 +173,8 @@ cp outputs/real_robot_tools/build/g1_read_lowstate \
   outputs/real_robot_tools/g1_read_lowstate
 ```
 
-只生成并检查从实时 LowState 到 SONICMJ 姿态的平滑轨迹，不发布控制：
+只从实时 LowState 提取双臂和腰部的 17DoF，生成对应 SONICMJ 平滑轨迹；输出中
+`leg_commands_generated=false` 且 `leg_command_indices=[]`，不生成腿部目标，也不发布控制：
 
 ```bash
 PYTHONPATH="$PWD/src:$PYTHONPATH" conda run --no-capture-output \
@@ -184,8 +185,8 @@ PYTHONPATH="$PWD/src:$PYTHONPATH" conda run --no-capture-output \
 `g1_initialize_upper_body` 复用宇树官方 `g1_arm7_sdk_dds_example.cpp` 的
 `rt/arm_sdk`、`kp=60`、`kd=1.5` 和权重交接方式。无 `--execute` 时只订阅
 LowState 并打印计划，不创建 publisher；显式执行模式仍需终端输入二次确认。本项目的
-腿部关节目标只用于仿真，真机腿部必须继续由 SONIC/WBC 平衡控制，不允许本工具发布
-`rt/lowcmd`。
+真机初始化命令集合固定为硬件索引 `12:29`（腰部和双臂），并有编译期断言禁止索引
+`0:12`（双腿）进入命令集合；本工具不发布 `rt/lowcmd`。
 
 episode 元数据会额外保存桌高、非手指右臂最大接触力和右臂连杆原点最低桌面净空。
 默认 40 mm 到点门槛不变；`--waypoint-tolerance-m` 只用于仿真敏感性复核。

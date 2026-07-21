@@ -22,6 +22,7 @@ initialization:
   # 最短时长；规划器会按当前关节差和速度上限自动延长。
   duration_s: 3.0
   max_joint_speed_rad_s: 0.35
+  # 只检查将由 rt/arm_sdk 初始化的双臂和腰部，不检查或规划腿部。
   max_measured_speed_rad_s: 0.20
 
 camera_geometry:

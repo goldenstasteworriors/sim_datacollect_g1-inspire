@@ -1,4 +1,4 @@
-"""Create a SONICMJ initialization plan from live G1 state without publishing control."""
+"""Create an arms-and-waist SONICMJ plan without generating leg commands."""
 
 from __future__ import annotations
 
@@ -44,37 +44,42 @@ def main() -> None:
     state = read_g1_arm_state(config["robot_state"])
     if state.body_q is None or state.body_dq is None:
         raise RuntimeError(
-            "机器人上的 g1_read_lowstate 尚未包含 29DoF body_q/body_dq；"
-            "请先重新编译部署只读工具"
+            "机器人上的 g1_read_lowstate 尚未包含完整 LowState；"
+            "需要它只读提取双臂和腰部状态，请先重新编译部署只读工具"
         )
-    max_measured_speed = float(np.max(np.abs(state.body_dq)))
+    body_index = {name: index for index, name in enumerate(G1_BODY_JOINT_NAMES)}
+    arm_sdk_indices = np.asarray(
+        [body_index[name] for name in G1_ARM_SDK_JOINT_NAMES], dtype=np.int64
+    )
+    if np.any(arm_sdk_indices < 12):
+        raise RuntimeError("安全断言失败：Arm SDK 初始化集合包含腿部关节索引")
+    current_q = state.body_q[arm_sdk_indices]
+    current_dq = state.body_dq[arm_sdk_indices]
+    max_measured_speed = float(np.max(np.abs(current_dq)))
     stationary_limit = float(init_cfg["max_measured_speed_rad_s"])
     if max_measured_speed > stationary_limit:
         raise RuntimeError(
-            f"机器人仍在运动，29DoF |dq|max={max_measured_speed:.3f}rad/s，"
+            f"机器人双臂/腰部仍在运动，17DoF |dq|max={max_measured_speed:.3f}rad/s，"
             f"超过规划上限 {stationary_limit:.3f}rad/s"
         )
 
-    target_q = sonicmj_initial_q()
+    target_q = sonicmj_initial_q(G1_ARM_SDK_JOINT_NAMES)
     max_joint_speed = float(init_cfg["max_joint_speed_rad_s"])
     configured_min_duration = float(init_cfg["duration_s"])
     # The maximum derivative of smoothstep(3t^2 - 2t^3) is 1.5.  Match the
     # hardware initializer: treat the configured duration as a lower bound and
     # extend it whenever the measured starting pose needs more time.
     required_duration = (
-        1.5 * float(np.max(np.abs(target_q - state.body_q))) / max_joint_speed
+        1.5 * float(np.max(np.abs(target_q - current_q))) / max_joint_speed
     )
     duration = max(configured_min_duration, required_duration)
     trajectory = smooth_initialization_trajectory(
-        state.body_q,
+        current_q,
         target_q,
         fps=int(init_cfg["fps"]),
         duration_s=duration,
         max_speed_rad_s=max_joint_speed,
     )
-    body_index = {name: index for index, name in enumerate(G1_BODY_JOINT_NAMES)}
-    arm_sdk_indices = np.asarray([body_index[name] for name in G1_ARM_SDK_JOINT_NAMES])
-    arm_sdk_trajectory = trajectory[:, arm_sdk_indices]
     measured_max_speed = float(
         np.max(np.abs(np.diff(trajectory, axis=0))) * int(init_cfg["fps"])
     )
@@ -84,11 +89,11 @@ def main() -> None:
     np.savez_compressed(
         output / "initialization_plan.npz",
         trajectory=trajectory,
-        arm_sdk_trajectory=arm_sdk_trajectory,
-        current_body_q=state.body_q.astype(np.float32),
-        target_body_q=target_q.astype(np.float32),
-        body_joint_names=np.asarray(G1_BODY_JOINT_NAMES),
+        arm_sdk_trajectory=trajectory,
+        current_arm_sdk_q=current_q.astype(np.float32),
+        target_arm_sdk_q=target_q.astype(np.float32),
         arm_sdk_joint_names=np.asarray(G1_ARM_SDK_JOINT_NAMES),
+        arm_sdk_motor_indices=arm_sdk_indices,
     )
     metadata = {
         "mode": "dry_run",
@@ -101,12 +106,15 @@ def main() -> None:
         "duration_s": duration,
         "configured_min_duration_s": configured_min_duration,
         "required_duration_s": required_duration,
-        "max_measured_body_speed_rad_s": max_measured_speed,
+        "max_measured_arm_sdk_speed_rad_s": max_measured_speed,
         "planned_max_joint_speed_rad_s": measured_max_speed,
         "configured_max_joint_speed_rad_s": max_joint_speed,
-        "body_joint_names": list(G1_BODY_JOINT_NAMES),
-        "current_body_q": state.body_q.tolist(),
-        "target_body_q": target_q.tolist(),
+        "commanded_joint_names": list(G1_ARM_SDK_JOINT_NAMES),
+        "commanded_motor_indices": arm_sdk_indices.tolist(),
+        "current_arm_sdk_q": current_q.tolist(),
+        "target_arm_sdk_q": target_q.tolist(),
+        "leg_command_indices": [],
+        "leg_commands_generated": False,
         "real_execution_scope": "waist_and_dual_arms_via_rt/arm_sdk; legs_remain_under_SONIC_WBC",
     }
     report = output / "initialization_plan.json"

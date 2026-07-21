@@ -30,10 +30,19 @@ constexpr double kKp = 60.0;
 constexpr double kKd = 1.5;
 
 // Official Unitree Arm SDK order: left arm, right arm, waist.
-constexpr std::array<int, 17> kJointIndices = {
+constexpr std::array<int, 17> kArmSdkJointIndices = {
     15, 16, 17, 18, 19, 20, 21,
     22, 23, 24, 25, 26, 27, 28,
     12, 13, 14};
+
+constexpr bool ContainsLegJointIndex() {
+  for (const int index : kArmSdkJointIndices) {
+    if (index >= 0 && index <= 11) return true;
+  }
+  return false;
+}
+
+static_assert(!ContainsLegJointIndex(), "Arm SDK command set must not contain leg joints");
 
 // SONICMJ SONIC_G1_DEFAULT_JOINT_POS in the order above.
 constexpr std::array<double, 17> kTarget = {
@@ -51,8 +60,8 @@ void FillCommand(
     const std::array<double, 17>& positions,
     double weight) {
   command.motor_cmd().at(kArmSdkWeightIndex).q(static_cast<float>(weight));
-  for (std::size_t i = 0; i < kJointIndices.size(); ++i) {
-    auto& motor = command.motor_cmd().at(kJointIndices[i]);
+  for (std::size_t i = 0; i < kArmSdkJointIndices.size(); ++i) {
+    auto& motor = command.motor_cmd().at(kArmSdkJointIndices[i]);
     motor.q(static_cast<float>(positions[i]));
     motor.dq(0.0f);
     motor.kp(static_cast<float>(kKp));
@@ -96,7 +105,7 @@ int main(int argc, char** argv) {
       return 3;
     }
   }
-  if (state.motor_state().size() <= static_cast<std::size_t>(kJointIndices[13])) {
+  if (state.motor_state().size() <= static_cast<std::size_t>(kArmSdkJointIndices[13])) {
     std::cerr << "LowState does not contain the required 29 body motor slots\n";
     return 4;
   }
@@ -104,8 +113,8 @@ int main(int argc, char** argv) {
   std::array<double, 17> current{};
   double max_delta = 0.0;
   double max_measured_speed = 0.0;
-  for (std::size_t i = 0; i < kJointIndices.size(); ++i) {
-    const auto& motor = state.motor_state().at(kJointIndices[i]);
+  for (std::size_t i = 0; i < kArmSdkJointIndices.size(); ++i) {
+    const auto& motor = state.motor_state().at(kArmSdkJointIndices[i]);
     current[i] = motor.q();
     if (!std::isfinite(current[i]) || !std::isfinite(motor.dq())) {
       std::cerr << "LowState contains a non-finite arm/waist value\n";
@@ -117,6 +126,8 @@ int main(int argc, char** argv) {
   const double duration = std::max(kMinimumDuration, 1.5 * max_delta / kMaximumJointSpeed);
   std::cout << std::fixed << std::setprecision(4)
             << "mode=" << (execute ? "execute" : "dry_run")
+            << " command_scope=dual_arms_and_waist"
+            << " leg_motor_commands=0"
             << " mode_machine=" << static_cast<unsigned>(state.mode_machine())
             << " max_measured_speed_rad_s=" << max_measured_speed
             << " max_delta_rad=" << max_delta
