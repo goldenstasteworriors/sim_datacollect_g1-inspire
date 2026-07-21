@@ -88,8 +88,8 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--object-randomization-m", type=float, default=0.04)
     parser.add_argument(
-        "--table-top-height-m", type=float, default=0.70,
-        help="碰撞桌板上表面的世界坐标高度，默认与真实桌面一致为0.70 m",
+        "--table-top-height-m", type=float, default=0.76,
+        help="碰撞桌板上表面的世界坐标高度，默认与真实桌面一致为0.76 m",
     )
     parser.add_argument(
         "--replay-real-plan", type=Path,

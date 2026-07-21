@@ -22,7 +22,7 @@ def _beaker_path() -> str:
 
 
 def _table_top_height() -> float:
-    return float(os.environ.get("LAB_TABLE_TOP_HEIGHT_M", "0.70"))
+    return float(os.environ.get("LAB_TABLE_TOP_HEIGHT_M", "0.76"))
 
 
 @configclass

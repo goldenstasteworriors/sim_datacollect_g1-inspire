@@ -143,12 +143,12 @@ lab-g1-real \
 
 ## 6. 真实计划只在 Isaac 中回放
 
-仿真桌板默认是带碰撞的 `1.20 x 0.80 x 0.04 m` 水平板，上表面严格位于 `0.70 m`：
+仿真桌板默认是带碰撞的 `1.20 x 0.80 x 0.04 m` 水平板，上表面严格位于 `0.76 m`：
 
 ```bash
 PYTHONPATH="$PWD/src:$PYTHONPATH" conda run --no-capture-output -n unitree_sim_env \
 python -m lab_g1_collect.sim_smoke --device cpu --headless --auto-collect \
-  --steps 900 --episodes 1 --object-shape cylinder --table-top-height-m 0.70 \
+  --steps 900 --episodes 1 --object-shape cylinder --table-top-height-m 0.76 \
   --replay-real-plan outputs/real_robot_dry_run/bottle_plan/dry_run_plan.npz \
   --arm-ik xr_teleoperate --xr-ik-profile autonomous \
   --output outputs/real_bottle_sim_review

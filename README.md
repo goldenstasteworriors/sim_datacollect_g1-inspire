@@ -291,7 +291,7 @@ dry-run 应改用本项目的 `lab-g1-rgbd-server`，它将深度对齐到彩色
 和实时腰部 LowState 做链式 FK，不再要求单独标定一个静态 `T_base_camera`。
 
 真实图像生成的计划可用 `--replay-real-plan PLAN.npz` 仅在 Isaac 中回放；场景默认
-生成上表面为 `0.70 m` 的碰撞桌板，并记录非手指右臂接触力与桌面净空。首次真实瓶子
+生成上表面为 `0.76 m` 的碰撞桌板，并记录非手指右臂接触力与桌面净空。首次真实瓶子
 评审结果见 `docs/real_bottle_sim_review_2026-07-20.md`。
 
 ## MANO wrist / Inspire base 交互标定
