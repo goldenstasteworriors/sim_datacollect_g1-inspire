@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import pickle
 import shutil
 from pathlib import Path
@@ -24,6 +25,11 @@ def main() -> None:
     parser.add_argument("--target-base-distance", type=float, default=0.12)
     args = parser.parse_args()
 
+    mano_dir = os.environ.get("LAB_HUG_MANO_DIR")
+    if mano_dir:
+        from hug.utils import data_keys
+
+        data_keys.MANO_MODELS_FOLDER = Path(mano_dir).expanduser().resolve()
     from hug.inference import main as infer
     from hug.prepare_inputs import prepare_pkl
     from hug.utils.pcl_utils import pixel_to_xyz

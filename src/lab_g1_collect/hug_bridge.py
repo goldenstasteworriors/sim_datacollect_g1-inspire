@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -180,15 +181,19 @@ def run_hug_capture(
         "PYTHONPATH": f"{project / 'src'}:{project / 'third_party/hug'}",
         "HF_HOME": str(project / ".cache/huggingface"),
         "TMPDIR": str(project / ".cache/tmp"),
-        "HTTP_PROXY": "http://127.0.0.1:7897",
-        "HTTPS_PROXY": "http://127.0.0.1:7897",
-        "http_proxy": "http://127.0.0.1:7897",
-        "https_proxy": "http://127.0.0.1:7897",
     })
-    env.pop("ALL_PROXY", None)
-    env.pop("all_proxy", None)
+    mano_dir = Path(env.get("LAB_HUG_MANO_DIR", project / "third_party/hug/assets/mano"))
+    if not mano_dir.exists():
+        home_mano = Path.home() / "commonly_used/mano_v1_2"
+        if home_mano.exists():
+            mano_dir = home_mano
+    env["LAB_HUG_MANO_DIR"] = str(mano_dir)
+    conda_exe = env.get("LAB_HUG_CONDA_EXE") or shutil.which("conda")
+    if conda_exe is None:
+        raise RuntimeError("未找到 conda；请设置 LAB_HUG_CONDA_EXE")
+    hug_env = env.get("LAB_HUG_CONDA_ENV", "hug")
     command = [
-        "/home/ykj/miniconda3/bin/conda", "run", "--no-capture-output", "-n", "hug",
+        conda_exe, "run", "--no-capture-output", "-n", hug_env,
         "python", "-m", "lab_g1_collect.hug_runtime", str(capture), str(dataset),
         str(project / "checkpoints/hug/hug_full.safetensors"),
         "--sampling-steps", str(sampling_steps),

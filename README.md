@@ -40,8 +40,9 @@ pip install -e .
 lab-g1 --config configs/pipeline.yaml doctor
 ```
 
-HUG 严格按官方 README 使用独立的 `hug` 环境。MANO 从
-`/home/ykj/commonly_used/mano_v1_2/models` 读取，不复制或提交许可文件。HUG 权重放在
+HUG 严格按官方 README 使用独立的 `hug` 环境。MANO 默认从
+`~/commonly_used/mano_v1_2/models` 读取，不复制或提交许可文件；可用
+`LAB_HUG_MANO_DIR` 覆盖。HUG 权重放在
 `checkpoints/hug/hug_full.safetensors`。
 
 ## 快速验证

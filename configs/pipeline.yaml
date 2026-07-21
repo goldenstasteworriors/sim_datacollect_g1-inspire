@@ -28,7 +28,7 @@ task:
 hug:
   repo: kevinywu/hug
   checkpoint: checkpoints/hug/hug_full.safetensors
-  mano_dir: /home/ykj/commonly_used/mano_v1_2/models
+  mano_dir: ~/commonly_used/mano_v1_2/models
   sample_dir: third_party/hug/data/custom
 
 dataset:

@@ -7,8 +7,7 @@ import numpy as np
 
 SONICMJ_INITIAL_POSE_NAME = "sonicmj"
 SONICMJ_INITIAL_POSE_SOURCE = (
-    "/home/ykj/project/SONICMJ/GR00T-WholeBodyControl/sonic_mj/assets.py:"
-    "SONIC_G1_DEFAULT_JOINT_POS"
+    "SONICMJ/GR00T-WholeBodyControl/sonic_mj/assets.py:SONIC_G1_DEFAULT_JOINT_POS"
 )
 
 # Unitree G1 29-DoF hardware order. This is also SONIC's canonical MuJoCo order.
