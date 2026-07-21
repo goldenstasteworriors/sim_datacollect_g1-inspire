@@ -297,9 +297,11 @@ dry-run 应改用本项目的 `lab-g1-rgbd-server`，它将深度对齐到彩色
 评审结果见 `docs/real_bottle_sim_review_2026-07-20.md`。
 
 机器人 reset 默认采用 SONICMJ/GEAR-SONIC 的 29DoF 初始姿态，而不是 Unitree
-Isaac 资产的全零手臂姿态。真机侧提供同一目标的 LowState dry-run 规划器，以及基于
-宇树官方 `rt/arm_sdk` 示例的双臂+腰初始化工具；腿部始终留给 SONIC/WBC 平衡控制。
-完整安全流程见 `docs/real_robot_dry_run.md`。
+Isaac 资产的全零手臂姿态。真机初始化和审核通过后的轨迹播放由 PC 上的
+`lab-g1-arm-player` 通过 `enp7s0` 直接发布 `rt/arm_sdk`；状态机与急停流程参考
+DIT4DIT 的轨迹播放器，但只写双臂和腰部 17 个硬件索引，腿部始终留给 SONIC/WBC。
+机器人端 C++ 工具固定为 subscriber-only，不能执行轨迹。完整安全流程见
+`docs/real_robot_dry_run.md`。
 
 ## MANO wrist / Inspire base 交互标定
 

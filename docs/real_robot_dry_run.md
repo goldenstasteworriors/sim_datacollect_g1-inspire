@@ -182,11 +182,48 @@ PYTHONPATH="$PWD/src:$PYTHONPATH" conda run --no-capture-output \
   --output outputs/real_robot_dry_run/sonicmj_initialization
 ```
 
-`g1_initialize_upper_body` 复用宇树官方 `g1_arm7_sdk_dds_example.cpp` 的
-`rt/arm_sdk`、`kp=60`、`kd=1.5` 和权重交接方式。无 `--execute` 时只订阅
-LowState 并打印计划，不创建 publisher；显式执行模式仍需终端输入二次确认。本项目的
-真机初始化命令集合固定为硬件索引 `12:29`（腰部和双臂），并有编译期断言禁止索引
-`0:12`（双腿）进入命令集合；本工具不发布 `rt/lowcmd`。
+机器人端 `g1_initialize_upper_body` 现已固定为 subscriber-only，只读取 LowState 并
+打印计划；传入 `--execute` 会直接拒绝，机器人端不再创建控制 publisher。
+
+真机初始化与审核通过后的抓取轨迹均由连接机器人网段的 PC 播放。实现参考 DIT4DIT
+`play_right_arm_trajectory.py` 的 DISARMED→INITIALIZING→READY→PLAYING 状态机、
+minimum-jerk、离线限速、SPACE/Q/Ctrl-C 急停和 LowState watchdog，但底层使用
+`rt/arm_sdk`，不会释放 SONIC/WBC，也不会发布 `rt/lowcmd`。命令集合固定为硬件索引
+`15:22`（左臂）、`22:29`（右臂）和 `12:15`（腰部）；代码断言禁止腿部索引 `0:12`
+进入命令。
+
+在 PC 上先做纯离线检查；此命令不初始化 DDS：
+
+```bash
+conda run -n unitree_sim_env python -m lab_g1_collect.real_arm_player
+```
+
+再从 PC 的 `enp7s0` 只订阅一次 LowState；此模式不创建 publisher：
+
+```bash
+conda run -n unitree_sim_env python -m lab_g1_collect.real_arm_player --network-interface enp7s0 --observe
+```
+
+初始化真机上半身时必须在交互终端运行。命令启动后仍不发布，按 ENTER 才创建 PC 端
+`rt/arm_sdk` publisher；SPACE/Q/Ctrl-C 会停止轨迹并将 Arm SDK 权重平滑释放到零：
+
+```bash
+conda run -n unitree_sim_env python -m lab_g1_collect.real_arm_player --network-interface enp7s0 --execute
+```
+
+播放 `real_grasp` 计划时，播放器会要求同目录 `plan.json` 同时满足
+`ik_all_reachable=true`、`speed_limit_exceeded=false`、
+`simulation_review_only=false`，并要求显式确认该计划已经在 0.76 m 碰撞桌场景审核。
+ENTER 初始化到轨迹首帧，进入 READY 后按 L 才开始播放：
+
+```bash
+conda run -n unitree_sim_env python -m lab_g1_collect.real_arm_player --network-interface enp7s0 --plan outputs/real_robot_dry_run/bottle_plan/dry_run_plan.npz --simulation-approved --execute
+```
+
+如果计划包含 Inspire 手轨迹，必须先启动 `inspire_modbus_hand.py --mode dds`；播放器会
+要求 `rt/inspire/state` 有新鲜反馈，并将 HUG 的 URDF 弧度转换为 DFX bridge 的
+`[0,1]` 命令后发布到 `rt/inspire/cmd`。当前历史 `bottle_plan_local` 的 IK、速度和
+simulation-review 安全门均失败，播放器会在连接 DDS 前拒绝它。
 
 episode 元数据会额外保存桌高、非手指右臂最大接触力和右臂连杆原点最低桌面净空。
 默认 40 mm 到点门槛不变；`--waypoint-tolerance-m` 只用于仿真敏感性复核。
