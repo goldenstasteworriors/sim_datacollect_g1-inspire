@@ -19,6 +19,7 @@ robot_state:
 initialization:
   profile: sonicmj
   fps: 50
+  # 最短时长；规划器会按当前关节差和速度上限自动延长。
   duration_s: 3.0
   max_joint_speed_rad_s: 0.35
   max_measured_speed_rad_s: 0.20

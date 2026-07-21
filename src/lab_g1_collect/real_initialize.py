@@ -56,12 +56,21 @@ def main() -> None:
         )
 
     target_q = sonicmj_initial_q()
+    max_joint_speed = float(init_cfg["max_joint_speed_rad_s"])
+    configured_min_duration = float(init_cfg["duration_s"])
+    # The maximum derivative of smoothstep(3t^2 - 2t^3) is 1.5.  Match the
+    # hardware initializer: treat the configured duration as a lower bound and
+    # extend it whenever the measured starting pose needs more time.
+    required_duration = (
+        1.5 * float(np.max(np.abs(target_q - state.body_q))) / max_joint_speed
+    )
+    duration = max(configured_min_duration, required_duration)
     trajectory = smooth_initialization_trajectory(
         state.body_q,
         target_q,
         fps=int(init_cfg["fps"]),
-        duration_s=float(init_cfg["duration_s"]),
-        max_speed_rad_s=float(init_cfg["max_joint_speed_rad_s"]),
+        duration_s=duration,
+        max_speed_rad_s=max_joint_speed,
     )
     body_index = {name: index for index, name in enumerate(G1_BODY_JOINT_NAMES)}
     arm_sdk_indices = np.asarray([body_index[name] for name in G1_ARM_SDK_JOINT_NAMES])
@@ -89,10 +98,12 @@ def main() -> None:
         "lowstate_source": state.source,
         "mode_machine": state.mode_machine,
         "fps": int(init_cfg["fps"]),
-        "duration_s": float(init_cfg["duration_s"]),
+        "duration_s": duration,
+        "configured_min_duration_s": configured_min_duration,
+        "required_duration_s": required_duration,
         "max_measured_body_speed_rad_s": max_measured_speed,
         "planned_max_joint_speed_rad_s": measured_max_speed,
-        "configured_max_joint_speed_rad_s": float(init_cfg["max_joint_speed_rad_s"]),
+        "configured_max_joint_speed_rad_s": max_joint_speed,
         "body_joint_names": list(G1_BODY_JOINT_NAMES),
         "current_body_q": state.body_q.tolist(),
         "target_body_q": target_q.tolist(),
